@@ -15,5 +15,5 @@ app.use(express.json());
 app.use('/rrhh', routes)
 
 app.listen(10323, () =>
-    console.log('REST API server ready at: http://localhost:10323'),
+    console.log('REST API server ready at: PAPAYA RRHH'),
 )
