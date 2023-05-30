@@ -1,0 +1,229 @@
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["fullTextSearch", "fullTextIndex"]
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+model area {
+  idarea                       Int                            @id @default(autoincrement())
+  descripcion                  String                         @db.VarChar(50)
+  idsede                       Int                            @default(0)
+  estado                       String                         @default("0") @db.Char(1)
+  colaborador_contrato_detalle colaborador_contrato_detalle[]
+}
+
+model colaborador {
+  idcolaborador        Int                    @id @default(autoincrement())
+  idorg                Int
+  idsede               Int
+  nombres              String                 @db.VarChar(200)
+  dni                  String                 @db.VarChar(20)
+  sexo                 String                 @db.Char(1)
+  correo               String                 @db.VarChar(100)
+  direccion            String                 @db.VarChar(200)
+  telefono             String                 @db.VarChar(30)
+  profesion            String?                @db.VarChar(100)
+  cuenta               String?                @db.VarChar(100)
+  f_nac                String                 @db.VarChar(30)
+  f_ingreso            String                 @db.VarChar(30)
+  estado               Int                    @default(0)
+  nom_banco            String?                @db.VarChar(60)
+  ciudad               String?                @db.VarChar(100)
+  provincia            String?                @db.VarChar(100)
+  apellidos            String?                @db.VarChar(120)
+  f_baja               String?                @db.Char(20)
+  sede                 sede                   @relation(fields: [idsede], references: [idsede], onUpdate: Restrict, map: "colaborador_FK")
+  org                  org                    @relation(fields: [idorg], references: [idorg], onUpdate: Restrict, map: "colaborador_FK_1")
+  colaborador_boleta   colaborador_boleta[]
+  colaborador_contrato colaborador_contrato[]
+  planilla_periodo     planilla_periodo[]
+
+  @@index([idsede], map: "colaborador_FK")
+  @@index([idorg], map: "colaborador_FK_1")
+}
+
+model colaborador_contrato {
+  idcolaborador_contrato       Int                            @id @default(autoincrement())
+  idcolaborador                Int
+  fecha_registro               String                         @db.Char(20)
+  fecha_empieza                String                         @db.Char(20)
+  estado                       String                         @default("0") @db.Char(1)
+  activo                       String                         @default("0") @db.Char(1)
+  idorg                        Int?
+  colaborador                  colaborador                    @relation(fields: [idcolaborador], references: [idcolaborador], onUpdate: Restrict, map: "colaborador_contrato_FK")
+  org                          org?                           @relation(fields: [idorg], references: [idorg], onDelete: Restrict, onUpdate: Restrict, map: "colaborador_contrato_FK_1")
+  colaborador_contrato_detalle colaborador_contrato_detalle[]
+
+  @@index([idcolaborador], map: "colaborador_contrato_FK")
+  @@index([idorg], map: "colaborador_contrato_FK_1")
+}
+
+model colaborador_contrato_detalle {
+  idcolaborador_contrato_detalle Int                  @id @default(autoincrement())
+  idcolaborador_contrato         Int
+  idsede_trabajo                 Int
+  idrrhh_rol                     Int
+  horas                          String               @db.Char(20)
+  unidad_horas                   String               @db.Char(20)
+  dias                           String               @db.Char(20)
+  unidad_remuneracion            String               @db.Char(20)
+  importe                        String               @db.Char(20)
+  estado                         String               @default("0") @db.Char(1)
+  idarea                         Int
+  idtipo_contrato                Int?
+  colaborador_contrato           colaborador_contrato @relation(fields: [idcolaborador_contrato], references: [idcolaborador_contrato], onUpdate: Restrict, map: "colaborador_contrato_detalle_FK")
+  rrhh_rol                       rrhh_rol             @relation(fields: [idrrhh_rol], references: [idrrhh_rol], onUpdate: Restrict, map: "colaborador_contrato_detalle_FK_1")
+  area                           area                 @relation(fields: [idarea], references: [idarea], onUpdate: Restrict, map: "colaborador_contrato_detalle_FK_2")
+  sede                           sede                 @relation(fields: [idsede_trabajo], references: [idsede], onUpdate: Restrict, map: "colaborador_contrato_detalle_FK_3")
+  tipo_contrato                  tipo_contrato?       @relation(fields: [idtipo_contrato], references: [idtipo_contrato], onDelete: Restrict, onUpdate: Restrict, map: "colaborador_contrato_detalle_FK_4")
+
+  @@index([idcolaborador_contrato], map: "colaborador_contrato_detalle_FK")
+  @@index([idrrhh_rol], map: "colaborador_contrato_detalle_FK_1")
+  @@index([idarea], map: "colaborador_contrato_detalle_FK_2")
+  @@index([idsede_trabajo], map: "colaborador_contrato_detalle_FK_3")
+  @@index([idtipo_contrato], map: "colaborador_contrato_detalle_FK_4")
+}
+
+model org {
+  idorg                Int                    @id @default(autoincrement())
+  nombre               String                 @db.VarChar(150)
+  direccion            String                 @db.VarChar(150)
+  ruc                  String                 @db.Char(20)
+  telefono             String                 @db.VarChar(50)
+  idorg_restobar       Int
+  estado               String                 @default("0") @db.Char(1)
+  colaborador          colaborador[]
+  colaborador_boleta   colaborador_boleta[]
+  colaborador_contrato colaborador_contrato[]
+  planilla_periodo     planilla_periodo[]
+  sede                 sede[]
+}
+
+model rrhh_rol {
+  idrrhh_rol                   Int                            @id @default(autoincrement())
+  descripcion                  String                         @db.VarChar(30)
+  estado                       String                         @default("0") @db.Char(1)
+  idsede                       Int?                           @default(0)
+  colaborador_contrato_detalle colaborador_contrato_detalle[]
+}
+
+model sede {
+  idsede                       Int                            @id @default(autoincrement())
+  idorg                        Int
+  idsede_restobar              Int
+  ruc                          String                         @db.Char(15)
+  razon_social                 String                         @db.VarChar(100)
+  nombre                       String                         @db.VarChar(150)
+  ciudad                       String                         @db.VarChar(100)
+  direccion                    String                         @db.VarChar(100)
+  telefono                     String                         @db.VarChar(50)
+  estado                       String                         @default("0") @db.Char(1)
+  principal                    String?                        @default("0") @db.Char(1)
+  colaborador                  colaborador[]
+  colaborador_contrato_detalle colaborador_contrato_detalle[]
+  org                          org                            @relation(fields: [idorg], references: [idorg], onUpdate: Restrict, map: "sede_FK")
+
+  @@index([idorg], map: "sede_FK")
+}
+
+model usuario {
+  idusuario          Int                @id @default(autoincrement())
+  idusuario_restobar Int
+  idsede             Int
+  nombres            String             @db.VarChar(100)
+  cargo              String             @db.VarChar(80)
+  usuario            String             @db.VarChar(50)
+  pass               String             @db.Char(20)
+  idorg              Int
+  estado             String             @default("0") @db.Char(1)
+  planilla_periodo   planilla_periodo[]
+}
+
+model tipo_variable {
+  idtipo_variable Int         @id @default(autoincrement())
+  descripcion     String      @db.Char(20)
+  estado          String      @default("0") @db.Char(1)
+  variables       variables[]
+}
+
+model variables {
+  idvariables          Int                  @id @default(autoincrement())
+  descripcion          String               @db.VarChar(100)
+  porcentaje           String               @default("0") @db.Char(1)
+  fijo                 String               @default("0") @db.Char(1)
+  valor                String               @db.Char(10)
+  idtipo_variable      Int
+  leyenda              String               @default("") @db.VarChar(255)
+  estado               String               @default("0") @db.Char(1)
+  idorg                Int                  @default(0)
+  idvariables_globales Int
+  colaborador_boleta   colaborador_boleta[]
+  variables_globales   variables_globales   @relation(fields: [idvariables_globales], references: [idvariables_globales], onUpdate: Restrict, map: "variables_FK")
+  tipo_variable        tipo_variable        @relation(fields: [idtipo_variable], references: [idtipo_variable], onUpdate: Restrict, map: "variables_FK_1")
+
+  @@index([idvariables_globales], map: "variables_FK")
+  @@index([idtipo_variable], map: "variables_FK_1")
+}
+
+model variables_globales {
+  idvariables_globales Int         @id @default(autoincrement())
+  descripcion          String      @db.VarChar(50)
+  importe              String      @db.Char(20)
+  idpais               String      @db.Char(3)
+  estado               String      @default("0") @db.Char(1)
+  idorg                Int?        @default(0)
+  variables            variables[]
+}
+
+model tipo_contrato {
+  idtipo_contrato              Int                            @id @default(autoincrement())
+  descripcion                  String                         @db.Char(50)
+  estado                       String                         @default("0") @db.Char(1)
+  colaborador_contrato_detalle colaborador_contrato_detalle[]
+}
+
+model colaborador_boleta {
+  idcolaborador_boleta Int         @id @default(autoincrement())
+  idcolaborador        Int
+  idorg                Int
+  idvariables          Int
+  f_add                String      @db.Char(15)
+  f_remove             String?     @db.Char(15)
+  estado               String      @default("0") @db.Char(1)
+  importe              String?     @default("0") @db.Char(10)
+  permanente           String?     @default("0") @db.Char(1)
+  periodo              String?     @db.Char(20)
+  colaborador          colaborador @relation(fields: [idcolaborador], references: [idcolaborador], onUpdate: Restrict, map: "colaborador_boleta_FK")
+  variables            variables   @relation(fields: [idvariables], references: [idvariables], onUpdate: Restrict, map: "colaborador_boleta_FK_1")
+  org                  org         @relation(fields: [idorg], references: [idorg], onUpdate: Restrict, map: "colaborador_boleta_FK_2")
+
+  @@index([idcolaborador], map: "colaborador_boleta_FK")
+  @@index([idvariables], map: "colaborador_boleta_FK_1")
+  @@index([idorg], map: "colaborador_boleta_FK_2")
+}
+
+model planilla_periodo {
+  idplanilla_periodo Int         @id @default(autoincrement())
+  idcolaborador      Int
+  idorg              Int
+  periodo            String      @db.Char(20)
+  cerrado            String      @default("0") @db.Char(1)
+  pagado             String      @default("0") @db.Char(1)
+  observaciones      String      @db.VarChar(200)
+  estado             String      @default("0") @db.Char(1)
+  idusuario          Int
+  f_cierre           String?     @db.Char(20)
+  f_pagado           String?     @db.Char(20)
+  total_pagado       String?     @db.Char(10)
+  colaborador        colaborador @relation(fields: [idcolaborador], references: [idcolaborador], onUpdate: Restrict, map: "planilla_periodo_FK")
+  org                org         @relation(fields: [idorg], references: [idorg], onUpdate: Restrict, map: "planilla_periodo_FK_1")
+  usuario            usuario     @relation(fields: [idusuario], references: [idusuario], onUpdate: Restrict, map: "planilla_periodo_FK_2")
+
+  @@index([idcolaborador], map: "planilla_periodo_FK")
+  @@index([idorg], map: "planilla_periodo_FK_1")
+  @@index([idusuario], map: "planilla_periodo_FK_2")
+}
