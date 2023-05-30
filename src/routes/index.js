@@ -43,7 +43,7 @@ var tipo_contrato_1 = __importDefault(require("../controllers/tipo.contrato"));
 var colaborador_boleta_1 = __importDefault(require("../controllers/colaborador.boleta"));
 var router = express.Router();
 router.get('/', function (req, res) {
-    res.status(200).json({ message: 'Estás conectado a nuestra API RRHH port: 100323' });
+    res.status(200).json({ message: 'Estás conectado a nuestra API RRHH port: 10323' });
 });
 router.use('/login', usuario_1.login);
 router.use('/login-restobar', login_restobar_1["default"]);

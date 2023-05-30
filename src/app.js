@@ -11,7 +11,7 @@ var routes_1 = __importDefault(require("./routes"));
 var app = (0, express_1["default"])();
 app.use((0, cors_1["default"])());
 app.use(express_1["default"].json());
-app.use('/rrhh', routes_1["default"]);
+app.use('/api-rrhh', routes_1["default"]);
 app.listen(10323, function () {
     return console.log('REST API server ready at: http://localhost:10323');
 });

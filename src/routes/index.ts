@@ -18,7 +18,7 @@ import colaborador_boleta from "../controllers/colaborador.boleta";
 const router = express.Router();
 
 router.get('/', function (req, res) {
-    res.status(200).json({ message: 'Estás conectado a nuestra API RRHH port: 100323' })
+    res.status(200).json({ message: 'Estás conectado a nuestra API RRHH port: 10323' })
 });
 
 router.use('/login', login);
