@@ -29,7 +29,7 @@ router.post('/login', async (req: any, res:any) => {
             const rptOrg: any = await createOrg(dataOrg);
 
             // crea sede
-            const dataSede = { ..._data.sede, idorg: rptOrg.idorg }
+            const dataSede = { ..._data.sede, idorg: rptOrg.idorg, principal: '1' }
             const rptSede = await createSede(dataSede);
             
             //crea usuario
