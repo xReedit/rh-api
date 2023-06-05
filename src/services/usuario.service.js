@@ -67,6 +67,7 @@ var client_1 = require("@prisma/client");
 // const _SECRET_KEY = SECRET_KEY;
 var prisma = new client_1.PrismaClient();
 var router = express.Router();
+// solo para restobar
 function login(_usuario) {
     return __awaiter(this, void 0, void 0, function () {
         var usuario, isMatch, token, err_1;

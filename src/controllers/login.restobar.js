@@ -97,7 +97,7 @@ router.post('/login', function (req, res) { return __awaiter(void 0, void 0, voi
                 return [4 /*yield*/, createOrg(dataOrg)];
             case 3:
                 rptOrg = _a.sent();
-                dataSede = __assign(__assign({}, _data.sede), { idorg: rptOrg.idorg });
+                dataSede = __assign(__assign({}, _data.sede), { idorg: rptOrg.idorg, principal: '1' });
                 return [4 /*yield*/, createSede(dataSede)];
             case 4:
                 rptSede = _a.sent();
