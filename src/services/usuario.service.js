@@ -74,7 +74,7 @@ function login(_usuario) {
             switch (_a.label) {
                 case 0:
                     _a.trys.push([0, 2, , 3]);
-                    return [4 /*yield*/, prisma.usuario.findFirst({ where: { usuario: _usuario.usuario } })];
+                    return [4 /*yield*/, prisma.usuario.findFirst({ where: { idusuario_restobar: Number(_usuario.idusuario_restobar) } })];
                 case 1:
                     usuario = _a.sent();
                     if (!usuario) {

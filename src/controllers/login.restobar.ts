@@ -17,7 +17,7 @@ router.get('/', function (req, res) {
 
 // login user
 router.post('/login', async (req: any, res:any) => {
-    const _data = req.body
+    const _data = req.body    
     try {
         // verificar si existe usuario restobar
         let userRestobar: any = await getUserRestobar(_data.user.idusuario_restobar)                        

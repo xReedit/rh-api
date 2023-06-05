@@ -9,9 +9,11 @@ import { PrismaClient } from "@prisma/client";
 const prisma = new PrismaClient();
 const router = express.Router();
 
+// solo para restobar
 export async function login(_usuario: any) {
     try {        
-        const usuario = <any>await prisma.usuario.findFirst({ where: { usuario: _usuario.usuario } });
+        // const usuario = <any>await prisma.usuario.findFirst({ where: { usuario: _usuario.usuario } });        
+        const usuario = <any>await prisma.usuario.findFirst({ where: { idusuario_restobar: Number(_usuario.idusuario_restobar) } });
 
         if (!usuario) {
             throw new Error("Usuario o Clave incorrectos");

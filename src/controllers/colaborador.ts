@@ -12,7 +12,7 @@ router.get('/', function (req, res) {
 // create
 router.post('/create', async (req: any, res) => {
     const _data = { ...req.body, idsede: req['token'].idsede, idorg: req['token'].idorg }
-    const rpt = await prisma.colaborador.create({
+    let rpt = await prisma.colaborador.create({
         data: _data
     })
 
