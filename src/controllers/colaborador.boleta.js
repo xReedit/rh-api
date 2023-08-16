@@ -86,10 +86,12 @@ router.post('/create', function (req, res) { return __awaiter(void 0, void 0, vo
                 _data = __assign(__assign({}, req.body), { idorg: req['token'].idorg });
                 return [4 /*yield*/, prisma.colaborador_boleta.create({
                         data: _data
-                    })];
+                    })
+                    // res.json(rpt)    
+                ];
             case 1:
                 rpt = _a.sent();
-                res.json(rpt);
+                // res.json(rpt)    
                 res.status(200).send(rpt);
                 prisma.$disconnect();
                 return [2 /*return*/];

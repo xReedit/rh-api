@@ -15,7 +15,7 @@ router.post('/create', async (req: any, res) => {
         data: _data
     })
 
-    res.json(rpt)    
+    // res.json(rpt)    
     res.status(200).send(rpt);
     prisma.$disconnect();
 });
