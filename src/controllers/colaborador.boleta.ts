@@ -15,7 +15,7 @@ router.post('/create', async (req: any, res) => {
         data: _data
     })
 
-    // res.json(rpt)    
+    res.json(rpt)    
     res.status(200).send(rpt);
     prisma.$disconnect();
 });
@@ -48,7 +48,9 @@ router.get('/byIdColaborador/:id/:periodo', async (req: any, res) => {
             importe: item.f3,
             nom_variable: item.f4,
             idtipo_variable: item.f5,
-            idvariables: item.f6
+            idvariables: item.f6,
+            fecha_registro: item.f7,
+            observaciones: item.f8
         }));
     }
 

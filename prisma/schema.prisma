@@ -197,6 +197,8 @@ model colaborador_boleta {
   importe              String?     @default("0") @db.Char(10)
   permanente           String?     @default("0") @db.Char(1)
   periodo              String?     @db.Char(20)
+  fecha_registro       String?     @db.Char(50)
+  observaciones        String?     @db.VarChar(100)
   colaborador          colaborador @relation(fields: [idcolaborador], references: [idcolaborador], onUpdate: Restrict, map: "colaborador_boleta_FK")
   variables            variables   @relation(fields: [idvariables], references: [idvariables], onUpdate: Restrict, map: "colaborador_boleta_FK_1")
   org                  org         @relation(fields: [idorg], references: [idorg], onUpdate: Restrict, map: "colaborador_boleta_FK_2")

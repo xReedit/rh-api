@@ -86,12 +86,10 @@ router.post('/create', function (req, res) { return __awaiter(void 0, void 0, vo
                 _data = __assign(__assign({}, req.body), { idorg: req['token'].idorg });
                 return [4 /*yield*/, prisma.colaborador_boleta.create({
                         data: _data
-                    })
-                    // res.json(rpt)    
-                ];
+                    })];
             case 1:
                 rpt = _a.sent();
-                // res.json(rpt)    
+                res.json(rpt);
                 res.status(200).send(rpt);
                 prisma.$disconnect();
                 return [2 /*return*/];
@@ -117,7 +115,9 @@ router.get('/byIdColaborador/:id/:periodo', function (req, res) { return __await
                         importe: item.f3,
                         nom_variable: item.f4,
                         idtipo_variable: item.f5,
-                        idvariables: item.f6
+                        idvariables: item.f6,
+                        fecha_registro: item.f7,
+                        observaciones: item.f8
                     }); });
                 }
                 res.status(200).send(newData);
