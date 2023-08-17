@@ -83,16 +83,36 @@ router.get('/', function (req, res) {
 });
 // lista por organizacion
 router.get('/byIdorg/:id/:periodo', function (req, res) { return __awaiter(void 0, void 0, void 0, function () {
-    var id, periodo, rpt;
+    var id, periodo, rpt, newData;
     return __generator(this, function (_a) {
         switch (_a.label) {
             case 0:
                 id = req.params.id;
                 periodo = req.params.periodo;
-                return [4 /*yield*/, prisma.$queryRaw(templateObject_1 || (templateObject_1 = __makeTemplateObject(["SELECT c.idcolaborador,cc.idcolaborador_contrato,c.nombres, c.apellidos, c.dni,c.sexo, c.profesion\n\t\t,s.nombre nom_sede, s.ciudad ciudad_sede\n\t\t,ccd.unidad_remuneracion, format(ccd.importe, 2)importe_remuneracion\n        ,rr.descripcion rol\n        ,format(COALESCE(pp.total_pagado, 0),2) total_pagado\n        ,cc.fecha_empieza\nfrom colaborador c \n inner join colaborador_contrato cc on cc.idcolaborador = c.idcolaborador \n inner join colaborador_contrato_detalle ccd on ccd.idcolaborador_contrato = cc.idcolaborador_contrato \n inner join rrhh_rol rr on ccd.idrrhh_rol = rr.idrrhh_rol\n inner join sede s on s.idsede = ccd.idsede_trabajo \n left join planilla_periodo pp \n    ON pp.idcolaborador = c.idcolaborador\n    and cast(pp.periodo as date) = cast(", " as date)\nwhere c.idorg = ", " and cc.estado = 0 and cc.activo='1' \n    and cast(cc.fecha_empieza as date) <= cast(", " as date)\norder by s.nombre"], ["SELECT c.idcolaborador,cc.idcolaborador_contrato,c.nombres, c.apellidos, c.dni,c.sexo, c.profesion\n\t\t,s.nombre nom_sede, s.ciudad ciudad_sede\n\t\t,ccd.unidad_remuneracion, format(ccd.importe, 2)importe_remuneracion\n        ,rr.descripcion rol\n        ,format(COALESCE(pp.total_pagado, 0),2) total_pagado\n        ,cc.fecha_empieza\nfrom colaborador c \n inner join colaborador_contrato cc on cc.idcolaborador = c.idcolaborador \n inner join colaborador_contrato_detalle ccd on ccd.idcolaborador_contrato = cc.idcolaborador_contrato \n inner join rrhh_rol rr on ccd.idrrhh_rol = rr.idrrhh_rol\n inner join sede s on s.idsede = ccd.idsede_trabajo \n left join planilla_periodo pp \n    ON pp.idcolaborador = c.idcolaborador\n    and cast(pp.periodo as date) = cast(", " as date)\nwhere c.idorg = ", " and cc.estado = 0 and cc.activo='1' \n    and cast(cc.fecha_empieza as date) <= cast(", " as date)\norder by s.nombre"])), periodo, id, periodo)];
+                return [4 /*yield*/, prisma.$queryRawUnsafe("call procedure_get_planilla_periodo(".concat(id, ", '").concat(periodo, "')"))];
             case 1:
                 rpt = _a.sent();
-                res.status(200).send(rpt);
+                newData = [];
+                if (rpt.length > 0) {
+                    newData = rpt.map(function (item) { return ({
+                        idcolaborador: item.f0,
+                        idcolaborador_contrato: item.f1,
+                        nombres: item.f2,
+                        apellidos: item.f3,
+                        dni: item.f4,
+                        sexo: item.f5,
+                        profesion: item.f6,
+                        nom_sede: item.f7,
+                        ciudad_sede: item.f8,
+                        unidad_remuneracion: item.f9,
+                        importe_remuneracion: item.f10,
+                        rol: item.f11,
+                        total_pagado: item.f12,
+                        fecha_empieza: item.f13,
+                        totales: item.f14
+                    }); });
+                }
+                res.status(200).send(newData);
                 prisma.$disconnect();
                 return [2 /*return*/];
         }
@@ -106,7 +126,7 @@ router.get('/colaborador-datos/:id', function (req, res) { return __awaiter(void
             case 0:
                 id = req.params.id;
                 idorg = Number(req['token'].idorg);
-                return [4 /*yield*/, prisma.$queryRaw(templateObject_2 || (templateObject_2 = __makeTemplateObject(["SELECT c.idcolaborador,cc.idcolaborador_contrato,c.nombres, c.apellidos, c.dni,c.sexo, c.profesion\n\t\t,c.f_ingreso \n\t\t,s.nombre nom_sede, s.ciudad ciudad_sede\n\t\t,ccd.unidad_remuneracion, format(ccd.importe, 2) suedo_basico\n\t\t,rr.descripcion cargo, a.descripcion nom_area\n\t\t,tc.descripcion tipo_contrato\n        ,cc.fecha_empieza,ccd.horas, c.cuenta, c.nom_banco\nfrom colaborador c \n inner join colaborador_contrato cc on cc.idcolaborador = c.idcolaborador \n inner join colaborador_contrato_detalle ccd on ccd.idcolaborador_contrato = cc.idcolaborador_contrato \n inner join rrhh_rol rr on ccd.idrrhh_rol = rr.idrrhh_rol \n inner join area a on ccd.idarea = a.idarea \n inner join sede s on s.idsede = ccd.idsede_trabajo \n inner join tipo_contrato tc on ccd.idtipo_contrato = tc.idtipo_contrato \nwhere (c.idcolaborador = ", " and c.idorg = ", ") and cc.estado = 0 and cc.activo='1'"], ["SELECT c.idcolaborador,cc.idcolaborador_contrato,c.nombres, c.apellidos, c.dni,c.sexo, c.profesion\n\t\t,c.f_ingreso \n\t\t,s.nombre nom_sede, s.ciudad ciudad_sede\n\t\t,ccd.unidad_remuneracion, format(ccd.importe, 2) suedo_basico\n\t\t,rr.descripcion cargo, a.descripcion nom_area\n\t\t,tc.descripcion tipo_contrato\n        ,cc.fecha_empieza,ccd.horas, c.cuenta, c.nom_banco\nfrom colaborador c \n inner join colaborador_contrato cc on cc.idcolaborador = c.idcolaborador \n inner join colaborador_contrato_detalle ccd on ccd.idcolaborador_contrato = cc.idcolaborador_contrato \n inner join rrhh_rol rr on ccd.idrrhh_rol = rr.idrrhh_rol \n inner join area a on ccd.idarea = a.idarea \n inner join sede s on s.idsede = ccd.idsede_trabajo \n inner join tipo_contrato tc on ccd.idtipo_contrato = tc.idtipo_contrato \nwhere (c.idcolaborador = ", " and c.idorg = ", ") and cc.estado = 0 and cc.activo='1'"])), id, idorg)];
+                return [4 /*yield*/, prisma.$queryRaw(templateObject_1 || (templateObject_1 = __makeTemplateObject(["SELECT c.idcolaborador,cc.idcolaborador_contrato,c.nombres, c.apellidos, c.dni,c.sexo, c.profesion\n\t\t,c.f_ingreso \n\t\t,s.nombre nom_sede, s.ciudad ciudad_sede\n\t\t,ccd.unidad_remuneracion, format(ccd.importe, 2) suedo_basico\n\t\t,rr.descripcion cargo, a.descripcion nom_area\n\t\t,tc.descripcion tipo_contrato\n        ,cc.fecha_empieza,ccd.horas, c.cuenta, c.nom_banco\nfrom colaborador c \n inner join colaborador_contrato cc on cc.idcolaborador = c.idcolaborador \n inner join colaborador_contrato_detalle ccd on ccd.idcolaborador_contrato = cc.idcolaborador_contrato \n inner join rrhh_rol rr on ccd.idrrhh_rol = rr.idrrhh_rol \n inner join area a on ccd.idarea = a.idarea \n inner join sede s on s.idsede = ccd.idsede_trabajo \n inner join tipo_contrato tc on ccd.idtipo_contrato = tc.idtipo_contrato \nwhere (c.idcolaborador = ", " and c.idorg = ", ") and cc.estado = 0 and cc.activo='1'"], ["SELECT c.idcolaborador,cc.idcolaborador_contrato,c.nombres, c.apellidos, c.dni,c.sexo, c.profesion\n\t\t,c.f_ingreso \n\t\t,s.nombre nom_sede, s.ciudad ciudad_sede\n\t\t,ccd.unidad_remuneracion, format(ccd.importe, 2) suedo_basico\n\t\t,rr.descripcion cargo, a.descripcion nom_area\n\t\t,tc.descripcion tipo_contrato\n        ,cc.fecha_empieza,ccd.horas, c.cuenta, c.nom_banco\nfrom colaborador c \n inner join colaborador_contrato cc on cc.idcolaborador = c.idcolaborador \n inner join colaborador_contrato_detalle ccd on ccd.idcolaborador_contrato = cc.idcolaborador_contrato \n inner join rrhh_rol rr on ccd.idrrhh_rol = rr.idrrhh_rol \n inner join area a on ccd.idarea = a.idarea \n inner join sede s on s.idsede = ccd.idsede_trabajo \n inner join tipo_contrato tc on ccd.idtipo_contrato = tc.idtipo_contrato \nwhere (c.idcolaborador = ", " and c.idorg = ", ") and cc.estado = 0 and cc.activo='1'"])), id, idorg)];
             case 1:
                 rpt = _a.sent();
                 res.status(200).send(rpt);
@@ -178,4 +198,4 @@ router.put('/update-cierre-periodo/:id', function (req, res) { return __awaiter(
     });
 }); });
 exports["default"] = router;
-var templateObject_1, templateObject_2;
+var templateObject_1;

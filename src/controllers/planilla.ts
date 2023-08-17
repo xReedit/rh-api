@@ -13,7 +13,7 @@ router.get('/', function (req, res) {
 router.get('/byIdorg/:id/:periodo', async (req: any, res) => {
     const { id } = req.params
     const { periodo } = req.params
-    const rpt = await prisma.$queryRaw`SELECT c.idcolaborador,cc.idcolaborador_contrato,c.nombres, c.apellidos, c.dni,c.sexo, c.profesion
+    /*const rpt = await prisma.$queryRaw`SELECT c.idcolaborador,cc.idcolaborador_contrato,c.nombres, c.apellidos, c.dni,c.sexo, c.profesion
 		,s.nombre nom_sede, s.ciudad ciudad_sede
 		,ccd.unidad_remuneracion, format(ccd.importe, 2)importe_remuneracion
         ,rr.descripcion rol
@@ -29,11 +29,33 @@ from colaborador c
     and cast(pp.periodo as date) = cast(${periodo} as date)
 where c.idorg = ${id} and cc.estado = 0 and cc.activo='1' 
     and cast(cc.fecha_empieza as date) <= cast(${periodo} as date)
-order by s.nombre`;
+order by s.nombre`;*/
 
+    let rpt: any = await prisma.$queryRawUnsafe(`call procedure_get_planilla_periodo(${id}, '${periodo}')`);
 
-    res.status(200).send(rpt);
-    prisma.$disconnect();
+    let newData: any = []
+    if (rpt.length > 0) {
+        newData = rpt.map((item: any) => ({
+            idcolaborador: item.f0,
+            idcolaborador_contrato: item.f1,
+            nombres: item.f2,
+            apellidos: item.f3,
+            dni: item.f4,
+            sexo: item.f5,
+            profesion: item.f6,
+            nom_sede: item.f7,
+            ciudad_sede: item.f8,
+            unidad_remuneracion: item.f9,
+            importe_remuneracion: item.f10,
+            rol: item.f11,
+            total_pagado: item.f12,
+            fecha_empieza: item.f13,
+            totales: item.f14
+        }));
+    }
+
+    res.status(200).send(newData);
+    prisma.$disconnect();    
 });
 
 
