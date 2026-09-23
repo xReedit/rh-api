@@ -54,6 +54,11 @@ export const posPublicAuth = (req: Request, res: Response, next: NextFunction) =
         if (!d.pub) { throw new Error('no es un token publico'); }
         next();
     } catch (e: any) {
+        // El cliente sigue viendo solo "token invalido" -- decirle POR QUE le
+        // daria pistas para adivinar el secreto. Pero el servidor tiene que
+        // dejarlo escrito: sin esto, un secreto mal copiado y un token vencido
+        // se ven identicos desde afuera y se depuran a ciegas.
+        console.error('[asistencia/publico] token rechazado:', e.message);
         res.status(401).json({ success: false, error: 'token invalido' });
     }
 };
@@ -82,6 +87,11 @@ export const posAuth = (req: Request, res: Response, next: NextFunction) => {
         (req as PosRequest).pos = { ido, idsede, idusuario: Number(d.idusuario) || 0 };
         next();
     } catch (e: any) {
+        // Idem: al cliente el motivo no, al log si.
+        //   'invalid signature'  -> el secreto del POS y el de la API no coinciden
+        //   'jwt expired'        -> relojes desfasados entre el POS y la API
+        //   'token sin empresa'  -> el POS no mando ido/idsede
+        console.error('[asistencia] token rechazado:', e.message);
         res.status(401).json({ success: false, error: 'token invalido' });
     }
 };
