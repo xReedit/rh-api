@@ -61,7 +61,26 @@ var __generator = (this && this.__generator) || function (thisArg, body) {
 exports.__esModule = true;
 exports.authVerify = exports.auth = exports.SECRET_KEY = void 0;
 var jwt = __importStar(require("jsonwebtoken"));
-exports.SECRET_KEY = 'DalePlay182182';
+/**
+ * El secreto que firma el login de Recursos Humanos.
+ *
+ * Estaba escrito aqui y versionado en git. Cualquiera con acceso al repositorio
+ * podia firmarse un token de cualquier empresa y leer o escribir su planilla;
+ * desde que la asistencia baja importes a la boleta, eso ya es plata.
+ *
+ * Revienta al arrancar si falta, a proposito. La alternativa -- seguir con un
+ * valor por defecto -- deja el agujero abierto justo donde nadie lo mira, y
+ * firmar con `undefined` haria que todos los tokens validen contra cualquier
+ * cosa. Es mejor que el servidor no levante y se vea en el primer intento.
+ *
+ * OJO al cambiarlo: invalida todas las sesiones abiertas y la gente vuelve a
+ * loguearse una vez.
+ */
+if (!process.env.SECRET_KEY) {
+    throw new Error('Falta SECRET_KEY en el .env. Es el secreto que firma el login de RRHH. ' +
+        'Generar uno con:  node -e "console.log(require(\'crypto\').randomBytes(32).toString(\'hex\'))"');
+}
+exports.SECRET_KEY = process.env.SECRET_KEY;
 var auth = function (req, res, next) { return __awaiter(void 0, void 0, void 0, function () {
     var token, decoded;
     var _a;

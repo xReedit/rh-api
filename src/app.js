@@ -5,6 +5,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 exports.__esModule = true;
+require("dotenv/config"); // sin esto process.env solo lo ve Prisma, no el codigo
 var express_1 = __importDefault(require("express"));
 var cors_1 = __importDefault(require("cors"));
 var routes_1 = __importDefault(require("./routes"));
