@@ -2,6 +2,7 @@
 // DATA 100323
 
 
+import 'dotenv/config'   // sin esto process.env solo lo ve Prisma, no el codigo
 import express from 'express'
 import cors from "cors";
 

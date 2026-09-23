@@ -13,6 +13,9 @@ import variables from "../controllers/varables";
 import planilla from "../controllers/planilla";
 import tipo_contrato from "../controllers/tipo.contrato";
 import colaborador_boleta from "../controllers/colaborador.boleta";
+import asistencia, { publico as asistenciaPublico } from "../controllers/asistencia";
+import asistenciaRrhh from "../controllers/asistencia.rrhh";
+import { posAuth, posPublicAuth } from '../middleware/pos.auth';
 
 
 const router = express.Router();
@@ -35,6 +38,20 @@ router.use('/variables', auth, variables);
 router.use('/planilla', auth, planilla);
 router.use('/tipo-contrato', auth, tipo_contrato);
 router.use('/colaborador-boleta', auth, colaborador_boleta);
+
+// Asistencia: la llama el POS legacy, no la app SvelteKit. Por eso lleva su
+// propio middleware en vez del `auth` de usuario de RRHH.
+//
+// /asistencia/publico/* lo abren el CELULAR del trabajador y la pantalla del
+// kiosko, que no tienen sesion del POS. Van bajo un prefijo propio y con el
+// middleware publico: asi ninguna ruta del panel puede quedar expuesta por
+// descuido, y se ve de un vistazo cual es cual.
+router.use('/asistencia/publico', posPublicAuth, asistenciaPublico);
+router.use('/asistencia', posAuth, asistencia);
+
+// La app de Recursos Humanos entra por otra puerta: usa su propio login
+// (middleware auth) y solo LEE. Corregir marcas sigue siendo del marcador.
+router.use('/asistencia-rrhh', auth, asistenciaRrhh);
 
 
 export default router;

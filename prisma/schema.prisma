@@ -36,6 +36,13 @@ model colaborador {
   provincia            String?                @db.VarChar(100)
   apellidos            String?                @db.VarChar(120)
   f_baja               String?                @db.Char(20)
+  idusuario_restobar   Int?
+  horario_semanal      Json?
+  tolerancia_min       Int                    @default(10) @db.SmallInt
+  qr_invitacion        String?                @db.Char(36)
+  qr_invitacion_exp    DateTime?              @db.DateTime(0)
+  idarea               Int?
+  motivo_baja          String?                @db.VarChar(150)
   sede                 sede                   @relation(fields: [idsede], references: [idsede], onUpdate: Restrict, map: "colaborador_FK")
   org                  org                    @relation(fields: [idorg], references: [idorg], onUpdate: Restrict, map: "colaborador_FK_1")
   colaborador_boleta   colaborador_boleta[]
@@ -44,6 +51,8 @@ model colaborador {
 
   @@index([idsede], map: "colaborador_FK")
   @@index([idorg], map: "colaborador_FK_1")
+  @@index([idusuario_restobar], map: "ix_colab_usrestobar")
+  @@index([idarea], map: "ix_colab_area")
 }
 
 model colaborador_contrato {
@@ -96,6 +105,15 @@ model org {
   telefono             String                 @db.VarChar(50)
   idorg_restobar       Int
   estado               String                 @default("0") @db.Char(1)
+  asis_hora_corte      DateTime               @default(dbgenerated("'05:00:00'")) @db.Time(0)
+  frecuencia_pago      org_frecuencia_pago    @default(MENSUAL)
+  semana_empieza       Int                    @default(1) @db.TinyInt
+  usa_pensiones        Boolean                @default(false)
+  usa_essalud          Boolean                @default(false)
+  usa_cts              Boolean                @default(false)
+  usa_gratificacion    Boolean                @default(false)
+  usa_renta_quinta     Boolean                @default(false)
+  usa_formato_legal    Boolean                @default(false)
   colaborador          colaborador[]
   colaborador_boleta   colaborador_boleta[]
   colaborador_contrato colaborador_contrato[]
@@ -123,6 +141,16 @@ model sede {
   telefono                     String                         @db.VarChar(50)
   estado                       String                         @default("0") @db.Char(1)
   principal                    String?                        @default("0") @db.Char(1)
+  gps_activo                   Boolean                        @default(false)
+  gps_lat                      Decimal?                       @db.Decimal(10, 8)
+  gps_lng                      Decimal?                       @db.Decimal(11, 8)
+  gps_radio_m                  Int                            @default(150)
+  dias_cierre                  String                         @default("") @db.VarChar(40)
+  feriado_abre                 Boolean                        @default(false)
+  feriado_recargo_pct          Int                            @default(0) @db.SmallInt
+  descanso_trabajado           sede_descanso_trabajado        @default(PERMISO)
+  descanso_recargo_pct         Int                            @default(100) @db.SmallInt
+  asis_configurado             Boolean                        @default(false)
   colaborador                  colaborador[]
   colaborador_contrato_detalle colaborador_contrato_detalle[]
   org                          org                            @relation(fields: [idorg], references: [idorg], onUpdate: Restrict, map: "sede_FK")
@@ -161,6 +189,8 @@ model variables {
   estado               String               @default("0") @db.Char(1)
   idorg                Int                  @default(0)
   idvariables_globales Int
+  codigo               String?              @unique(map: "ux_variables_codigo") @db.VarChar(30)
+  requiere             String?              @db.VarChar(20)
   colaborador_boleta   colaborador_boleta[]
   variables_globales   variables_globales   @relation(fields: [idvariables_globales], references: [idvariables_globales], onUpdate: Restrict, map: "variables_FK")
   tipo_variable        tipo_variable        @relation(fields: [idtipo_variable], references: [idtipo_variable], onUpdate: Restrict, map: "variables_FK_1")
@@ -209,23 +239,206 @@ model colaborador_boleta {
 }
 
 model planilla_periodo {
-  idplanilla_periodo Int         @id @default(autoincrement())
+  idplanilla_periodo Int                   @id @default(autoincrement())
   idcolaborador      Int
   idorg              Int
-  periodo            String      @db.Char(20)
-  cerrado            String      @default("0") @db.Char(1)
-  pagado             String      @default("0") @db.Char(1)
-  observaciones      String      @db.VarChar(200)
-  estado             String      @default("0") @db.Char(1)
+  periodo            String                @db.Char(20)
+  cerrado            String                @default("0") @db.Char(1)
+  pagado             String                @default("0") @db.Char(1)
+  observaciones      String                @db.VarChar(200)
+  estado             String                @default("0") @db.Char(1)
   idusuario          Int
-  f_cierre           String?     @db.Char(20)
-  f_pagado           String?     @db.Char(20)
-  total_pagado       String?     @db.Char(10)
-  colaborador        colaborador @relation(fields: [idcolaborador], references: [idcolaborador], onUpdate: Restrict, map: "planilla_periodo_FK")
-  org                org         @relation(fields: [idorg], references: [idorg], onUpdate: Restrict, map: "planilla_periodo_FK_1")
-  usuario            usuario     @relation(fields: [idusuario], references: [idusuario], onUpdate: Restrict, map: "planilla_periodo_FK_2")
+  f_cierre           String?               @db.Char(20)
+  f_pagado           String?               @db.Char(20)
+  total_pagado       String?               @db.Char(10)
+  desde              DateTime?             @db.Date
+  hasta              DateTime?             @db.Date
+  tipo               planilla_periodo_tipo @default(MENSUAL)
+  colaborador        colaborador           @relation(fields: [idcolaborador], references: [idcolaborador], onUpdate: Restrict, map: "planilla_periodo_FK")
+  org                org                   @relation(fields: [idorg], references: [idorg], onUpdate: Restrict, map: "planilla_periodo_FK_1")
+  usuario            usuario               @relation(fields: [idusuario], references: [idusuario], onUpdate: Restrict, map: "planilla_periodo_FK_2")
 
   @@index([idcolaborador], map: "planilla_periodo_FK")
   @@index([idorg], map: "planilla_periodo_FK_1")
   @@index([idusuario], map: "planilla_periodo_FK_2")
+}
+
+model asistencia_kiosko {
+  idkiosko        Int       @id @default(autoincrement())
+  idorg           Int
+  idsede_restobar Int
+  nombre          String    @db.VarChar(80)
+  token_hash      String    @unique(map: "ux_kiosko_token") @db.Char(64)
+  ultimo_visto_at DateTime? @db.DateTime(0)
+  revocado_at     DateTime? @db.DateTime(0)
+  creado_at       DateTime  @db.DateTime(0)
+  permite_manual  Boolean   @default(false)
+}
+
+model asistencia_marca {
+  idasistencia_marca        Int                     @id @default(autoincrement())
+  idcolaborador             Int
+  idorg                     Int
+  idsede_restobar           Int
+  tipo                      asistencia_marca_tipo
+  fecha_local               DateTime                @db.Date
+  marcada_at                DateTime                @db.DateTime(0)
+  metodo                    asistencia_marca_metodo @default(QR)
+  hora_esperada             DateTime?               @db.Time(0)
+  tardanza_min              Int?
+  iddispositivo             Int?
+  idkiosko                  Int?
+  manual_idusuario_restobar Int?
+  manual_motivo             String?                 @db.VarChar(200)
+  ip                        String?                 @db.VarChar(45)
+  gps_lat                   Decimal?                @db.Decimal(10, 8)
+  gps_lng                   Decimal?                @db.Decimal(11, 8)
+  gps_distancia_m           Int?
+
+  @@unique([idcolaborador, fecha_local, tipo], map: "ux_marca_dia")
+  @@index([idorg, fecha_local], map: "ix_reporte")
+  @@index([idsede_restobar, fecha_local], map: "ix_sede_dia")
+}
+
+model colaborador_dispositivo {
+  iddispositivo Int       @id @default(autoincrement())
+  idcolaborador Int
+  token_hash    String    @unique(map: "ux_disp_token") @db.Char(64)
+  activo        Boolean?  @default(true)
+  creado_at     DateTime  @db.DateTime(0)
+  expira_at     DateTime  @db.DateTime(0)
+  revocado_at   DateTime? @db.DateTime(0)
+  user_agent    String?   @db.VarChar(255)
+
+  @@unique([idcolaborador, activo], map: "ux_disp_activo")
+}
+
+model asistencia_excepcion {
+  idexcepcion     Int                                @id @default(autoincrement())
+  idorg           Int
+  idsede_restobar Int
+  idcolaborador   Int                                @default(0)
+  fecha           DateTime                           @db.Date
+  tipo            asistencia_excepcion_tipo
+  motivo          String                             @db.VarChar(200)
+  compensacion    asistencia_excepcion_compensacion?
+  fecha_sustituto DateTime?                          @db.Date
+  recargo_pct     Int                                @default(100)
+  creado_por      Int?
+  creado_at       DateTime                           @db.DateTime(0)
+  origen          asistencia_excepcion_origen        @default(MANUAL)
+  categoria       asistencia_excepcion_categoria     @default(NORMAL)
+
+  @@unique([idsede_restobar, idcolaborador, fecha], map: "ux_excepcion")
+  @@index([idorg, fecha], map: "ix_exc_org_dia")
+  @@index([idcolaborador, fecha_sustituto], map: "ix_exc_sustituto")
+  @@index([idsede_restobar, categoria, fecha], map: "ix_exc_categoria")
+}
+
+model asistencia_feriado {
+  idferiado   Int      @id @default(autoincrement())
+  idorg       Int      @default(0)
+  fecha       DateTime @db.Date
+  descripcion String   @db.VarChar(120)
+  estado      String   @default("0") @db.Char(1)
+
+  @@unique([idorg, fecha], map: "ux_feriado")
+  @@index([fecha], map: "ix_feriado_fecha")
+}
+
+model asistencia_bitacora {
+  idbitacora        Int                         @id @default(autoincrement())
+  idorg             Int
+  idsede_restobar   Int
+  entidad           asistencia_bitacora_entidad
+  identidad         Int?
+  idcolaborador     Int?
+  accion            asistencia_bitacora_accion
+  detalle           String                      @db.VarChar(500)
+  valor_anterior    String?                     @db.Text
+  valor_nuevo       String?                     @db.Text
+  origen            asistencia_bitacora_origen
+  idusuario         Int?
+  usuario_nombre    String                      @default("") @db.VarChar(120)
+  autorizado_por    Int?
+  autorizado_nombre String                      @default("") @db.VarChar(120)
+  creado_at         DateTime                    @db.DateTime(0)
+
+  @@index([idcolaborador, creado_at], map: "ix_bit_colaborador")
+  @@index([entidad, identidad], map: "ix_bit_entidad")
+  @@index([idorg, creado_at], map: "ix_bit_org_fecha")
+}
+
+enum asistencia_marca_tipo {
+  ENTRADA
+  SALIDA
+}
+
+enum asistencia_marca_metodo {
+  QR
+  MANUAL
+}
+
+enum asistencia_excepcion_tipo {
+  LABORABLE
+  NO_LABORABLE
+}
+
+enum asistencia_excepcion_compensacion {
+  SUSTITUTORIO
+  RECARGO
+}
+
+enum asistencia_bitacora_accion {
+  CREA
+  MODIFICA
+  ELIMINA
+}
+
+enum asistencia_bitacora_origen {
+  POS
+  RRHH
+}
+
+enum asistencia_excepcion_origen {
+  MANUAL
+  KIOSKO
+}
+
+enum sede_descanso_trabajado {
+  PERMISO
+  RECARGO
+}
+
+enum asistencia_bitacora_entidad {
+  HORARIO
+  EXCEPCION
+  FERIADO
+  DIAS_CIERRE
+  MARCA
+  GPS
+  POLITICA
+  PLANILLA
+}
+
+enum asistencia_excepcion_categoria {
+  NORMAL
+  VACACIONES
+  LICENCIA
+  DESCANSO_MEDICO
+  PERMISO_SIN_GOCE
+}
+
+enum org_frecuencia_pago {
+  MENSUAL
+  QUINCENAL
+  SEMANAL
+  DIARIO
+}
+
+enum planilla_periodo_tipo {
+  MENSUAL
+  QUINCENAL
+  SEMANAL
+  DIARIO
 }

@@ -102,5 +102,11 @@
     /* Completeness */
     // "skipDefaultLibCheck": true,                      /* Skip type checking .d.ts files that are included with TypeScript. */
     "skipLibCheck": true                                 /* Skip type checking all .d.ts files. */
-  }
+  },
+
+  /* src/ tiene 18 .js compilados en 2023 (tsc emite al lado del fuente porque
+     outDir esta comentado). Node resuelve ./routes -> routes/index.js antes que
+     index.ts, asi que en dev se ejecutaba codigo viejo y cualquier .ts nuevo
+     quedaba invisible. preferTsExts invierte esa prioridad sin borrar nada. */
+  "ts-node": { "preferTsExts": true }
 }
