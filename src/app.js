@@ -5,7 +5,10 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 exports.__esModule = true;
-require("dotenv/config"); // sin esto process.env solo lo ve Prisma, no el codigo
+// PRIMERO, antes que cualquier otro import: los modulos que siguen leen
+// process.env al cargarse. Ver src/env.ts para por que no alcanza con
+// 'dotenv/config' a secas.
+require("./env");
 var express_1 = __importDefault(require("express"));
 var cors_1 = __importDefault(require("cors"));
 var routes_1 = __importDefault(require("./routes"));

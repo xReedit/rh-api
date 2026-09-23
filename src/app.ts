@@ -2,7 +2,10 @@
 // DATA 100323
 
 
-import 'dotenv/config'   // sin esto process.env solo lo ve Prisma, no el codigo
+// PRIMERO, antes que cualquier otro import: los modulos que siguen leen
+// process.env al cargarse. Ver src/env.ts para por que no alcanza con
+// 'dotenv/config' a secas.
+import './env'
 import express from 'express'
 import cors from "cors";
 
