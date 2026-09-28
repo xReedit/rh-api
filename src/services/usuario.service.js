@@ -1,4 +1,15 @@
 "use strict";
+var __assign = (this && this.__assign) || function () {
+    __assign = Object.assign || function(t) {
+        for (var s, i = 1, n = arguments.length; i < n; i++) {
+            s = arguments[i];
+            for (var p in s) if (Object.prototype.hasOwnProperty.call(s, p))
+                t[p] = s[p];
+        }
+        return t;
+    };
+    return __assign.apply(this, arguments);
+};
 var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
     if (k2 === undefined) k2 = k;
     var desc = Object.getOwnPropertyDescriptor(m, k);
@@ -59,7 +70,7 @@ var __generator = (this && this.__generator) || function (thisArg, body) {
     }
 };
 exports.__esModule = true;
-exports.login = void 0;
+exports.login = exports.loginPorUsuario = void 0;
 var jwt = __importStar(require("jsonwebtoken"));
 var express = __importStar(require("express"));
 var auth_1 = require("../middleware/auth");
@@ -67,6 +78,102 @@ var client_1 = require("@prisma/client");
 // const _SECRET_KEY = SECRET_KEY;
 var prisma = new client_1.PrismaClient();
 var router = express.Router();
+/**
+ * La base del POS. Es el mismo servidor MySQL, otra base.
+ *
+ * Se deja configurable porque el nombre puede no ser `restobar` en todos los
+ * despliegues. Va como IDENTIFICADOR dentro del SQL -- eso no se puede
+ * parametrizar -- asi que se valida a mano antes de usarlo: si alguien pone
+ * cualquier cosa en la variable de entorno, se cae aqui y no dentro de una
+ * consulta armada a mano.
+ */
+var POS_DB = (function () {
+    var n = process.env.POS_DB || 'restobar';
+    if (!/^[A-Za-z0-9_]+$/.test(n)) {
+        throw new Error("POS_DB invalido: ".concat(n, ". Solo letras, numeros y guion bajo."));
+    }
+    return n;
+})();
+/**
+ * Login con nombre de usuario y clave, para entrar a rrhh-1 sin pasar por el POS.
+ *
+ * LA CLAVE SE VALIDA CONTRA EL POS, NO CONTRA `rrhh.usuario`.
+ *
+ * Antes se comparaba contra `rrhh.usuario.pass`, creyendo que era una copia de
+ * la clave del POS. No lo es: el SSO manda `pass: ''` (ver getDataUsRRHH en
+ * xm_all.js del POS), asi que esa columna queda VACIA para todo el que entro
+ * por ahi. El login nunca pudo funcionar, y donde tenia algo cargado a mano
+ * era una clave vieja que nadie volvia a tocar -- en desarrollo habia una en
+ * `123456`.
+ *
+ * Con el POS como unica fuente: cambiar la clave alli vale aqui en el acto, y
+ * no queda un segundo lugar donde una clave se pudra sin que nadie la mire.
+ */
+function loginPorUsuario(usuario, pass) {
+    var _a;
+    return __awaiter(this, void 0, void 0, function () {
+        var u, p, enElPos, pos, org, usr, _b, sede, token;
+        return __generator(this, function (_c) {
+            switch (_c.label) {
+                case 0:
+                    u = String(usuario || '').trim();
+                    p = String(pass !== null && pass !== void 0 ? pass : '');
+                    if (!u || !p) {
+                        throw new Error('Escribe tu usuario y tu clave.');
+                    }
+                    return [4 /*yield*/, prisma.$queryRawUnsafe("SELECT idusuario, idorg, usuario FROM ".concat(POS_DB, ".usuario\n          WHERE usuario = ? AND pass = ? AND estado = 0"), u, p)];
+                case 1:
+                    enElPos = _c.sent();
+                    if (enElPos.length === 0) {
+                        // El mismo mensaje para "no existe" y para "clave mala": distinguirlos
+                        // le confirma a cualquiera que un usuario existe.
+                        throw new Error('Usuario o clave incorrectos.');
+                    }
+                    if (enElPos.length > 1) {
+                        // Adivinar seria peor que fallar: se meteria a la persona en la
+                        // planilla de otro negocio.
+                        throw new Error('Ese usuario existe en mas de una empresa. Entra desde el POS, que ya sabe cual es la tuya.');
+                    }
+                    pos = enElPos[0];
+                    return [4 /*yield*/, prisma.org.findFirst({
+                            where: { idorg_restobar: Number(pos.idorg) }
+                        })];
+                case 2:
+                    org = _c.sent();
+                    _b = org;
+                    if (!_b) return [3 /*break*/, 4];
+                    return [4 /*yield*/, prisma.usuario.findFirst({
+                            where: { idorg: org.idorg, idusuario_restobar: Number(pos.idusuario) }
+                        })];
+                case 3:
+                    _b = (_c.sent());
+                    _c.label = 4;
+                case 4:
+                    usr = _b;
+                    if (!usr) {
+                        // La clave estaba bien; lo que falta es la ficha, y esa la crea el SSO.
+                        // Se lo decimos tal cual: mandarlo a revisar la clave seria mentirle.
+                        throw new Error('Tu clave es correcta, pero todavia no tienes ficha en Recursos Humanos. ' +
+                            'Entra una vez desde el POS, en Recursos Humanos, y despues ya puedes entrar por aqui.');
+                    }
+                    return [4 /*yield*/, prisma.sede.findUnique({ where: { idsede: usr.idsede } })];
+                case 5:
+                    sede = _c.sent();
+                    token = jwt.sign({
+                        id: usr.idusuario, usuario: usr.usuario,
+                        // El nombre de la persona, para saludarla por su nombre en la barra.
+                        // Sin esto la pantalla mostraba el usuario interno -- alguien que
+                        // entraba como "easoporte" veia "SISTEMA" y no se reconocia.
+                        nombres: usr.nombres || usr.usuario,
+                        idsede: usr.idsede, idorg: usr.idorg,
+                        idsede_restobar: (_a = sede === null || sede === void 0 ? void 0 : sede.idsede_restobar) !== null && _a !== void 0 ? _a : 0
+                    }, auth_1.SECRET_KEY, { expiresIn: '1d' });
+                    return [2 /*return*/, { usuario: __assign(__assign({}, usr), { pass: undefined }), token: token }];
+            }
+        });
+    });
+}
+exports.loginPorUsuario = loginPorUsuario;
 // solo para restobar
 function login(_usuario) {
     return __awaiter(this, void 0, void 0, function () {
@@ -83,7 +190,7 @@ function login(_usuario) {
                     }
                     isMatch = _usuario.pass === usuario.pass;
                     if (isMatch) {
-                        token = jwt.sign({ id: usuario.idusuario, usuario: usuario.usuario, idsede: usuario.idsede, idorg: usuario.idorg, idsede_restobar: _usuario.idsede_restobar }, auth_1.SECRET_KEY, {
+                        token = jwt.sign({ id: usuario.idusuario, usuario: usuario.usuario, nombres: usuario.nombres || usuario.usuario, idsede: usuario.idsede, idorg: usuario.idorg, idsede_restobar: _usuario.idsede_restobar }, auth_1.SECRET_KEY, {
                             expiresIn: "1d"
                         });
                         return [2 /*return*/, { usuario: usuario, token: token }];

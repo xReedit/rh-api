@@ -1,5 +1,5 @@
 import * as express from "express";
-import { login } from "../controllers/usuario";
+import { login, loginPanel } from "../controllers/usuario";
 import usuario from "../controllers/usuario";
 import loginRestobar from "../controllers/login.restobar";
 import { auth, authVerify } from '../middleware/auth';
@@ -26,6 +26,12 @@ router.get('/', function (req, res) {
 
 router.use('/login', login);
 router.use('/login-restobar', loginRestobar);
+// Entrada directa a rrhh-1, sin pasar por el POS.
+//
+// La clave se valida contra el POS, que es la unica fuente. Lo que sigue
+// haciendo falta del primer ingreso por SSO es la FICHA de Recursos Humanos:
+// es la que dice que locales ve cada uno.
+router.post('/login-panel', loginPanel);
 router.use('/verify-login', authVerify);
 router.use('/rol', auth, rol);
 router.use('/area', auth, area);

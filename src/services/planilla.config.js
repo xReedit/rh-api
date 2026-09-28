@@ -65,10 +65,11 @@ var __generator = (this && this.__generator) || function (thisArg, body) {
     }
 };
 exports.__esModule = true;
-exports.resolverPeriodoDeOrg = exports.guardarConfig = exports.leerConfig = exports.configDe = exports.INTERRUPTORES = void 0;
+exports.resolverPeriodoDeOrg = exports.guardarConfig = exports.leerConfig = exports.configDe = exports.normalizarUmbral = exports.UMBRAL_SOBRETIEMPO_DEFECTO = exports.INTERRUPTORES = void 0;
 var client_1 = require("@prisma/client");
 var asistencia_bitacora_1 = require("./asistencia.bitacora");
 var asistencia_config_1 = require("./asistencia.config");
+var planilla_regimen_1 = require("./planilla.regimen");
 var planilla_periodos_1 = require("./planilla.periodos");
 var asistencia_calendario_1 = require("./asistencia.calendario");
 var prisma = new client_1.PrismaClient();
@@ -85,10 +86,31 @@ exports.INTERRUPTORES = [
     { campo: 'usa_renta_quinta', clave: 'renta_quinta', titulo: 'Renta de quinta categoria',
         ayuda: 'Retencion de impuesto a la renta. Solo aplica por encima de 7 UIT al ano.' },
     { campo: 'usa_formato_legal', clave: 'formato_legal', titulo: 'Boleta con formato de ley',
-        ayuda: 'Imprime la boleta con los datos que exige la norma: RUC, regimen laboral, dias trabajados.' }
+        ayuda: 'Imprime la boleta con los datos que exige la norma: RUC, regimen laboral, dias trabajados.' },
+    { campo: 'usa_sobretiempo', clave: 'sobretiempo', titulo: 'Pagar horas extra',
+        ayuda: 'Agrega a la boleta el tiempo trabajado de mas: 25% las dos primeras horas del dia y 35% las siguientes (D.S. 007-2002-TR). Las horas extra se REGISTRAN siempre, este activado o no; esto decide si ademas se pagan.' }
 ];
+/** Minutos de gracia por defecto antes de contar sobretiempo. */
+exports.UMBRAL_SOBRETIEMPO_DEFECTO = 15;
+/**
+ * El umbral, acotado a algo que tenga sentido.
+ *
+ * Un umbral enorme apagaria el sobretiempo sin que nadie se entere: la pantalla
+ * diria que esta activado y no pagaria nunca. Dos horas es el tope: mas que eso
+ * ya no es "margen para marcar", es media jornada regalada.
+ */
+function normalizarUmbral(v) {
+    var n = Number(v);
+    if (!Number.isFinite(n) || n < 0) {
+        return exports.UMBRAL_SOBRETIEMPO_DEFECTO;
+    }
+    return Math.min(Math.round(n), 120);
+}
+exports.normalizarUmbral = normalizarUmbral;
 function configDe(org) {
     return {
+        regimen_laboral: (0, planilla_regimen_1.normalizarRegimen)(org === null || org === void 0 ? void 0 : org.regimen_laboral),
+        rmv: (0, planilla_regimen_1.normalizarRmv)(org === null || org === void 0 ? void 0 : org.rmv),
         frecuencia_pago: (0, planilla_periodos_1.normalizarFrecuencia)(org === null || org === void 0 ? void 0 : org.frecuencia_pago),
         semana_empieza: (0, planilla_periodos_1.normalizarInicioSemana)(org === null || org === void 0 ? void 0 : org.semana_empieza),
         usa_pensiones: !!(org === null || org === void 0 ? void 0 : org.usa_pensiones),
@@ -96,7 +118,9 @@ function configDe(org) {
         usa_cts: !!(org === null || org === void 0 ? void 0 : org.usa_cts),
         usa_gratificacion: !!(org === null || org === void 0 ? void 0 : org.usa_gratificacion),
         usa_renta_quinta: !!(org === null || org === void 0 ? void 0 : org.usa_renta_quinta),
-        usa_formato_legal: !!(org === null || org === void 0 ? void 0 : org.usa_formato_legal)
+        usa_formato_legal: !!(org === null || org === void 0 ? void 0 : org.usa_formato_legal),
+        usa_sobretiempo: !!(org === null || org === void 0 ? void 0 : org.usa_sobretiempo),
+        sobretiempo_min_umbral: normalizarUmbral(org === null || org === void 0 ? void 0 : org.sobretiempo_min_umbral)
     };
 }
 exports.configDe = configDe;
@@ -111,6 +135,9 @@ function leerConfig(ctx) {
                     cfg = configDe(org);
                     hoy = (0, asistencia_calendario_1.ahoraLima)().slice(0, 10);
                     return [2 /*return*/, __assign(__assign({}, cfg), { interruptores: exports.INTERRUPTORES.map(function (i) { return (__assign(__assign({}, i), { activo: cfg[i.campo] })); }), 
+                            // La pantalla no tiene por que saberse la Ley MYPE: se le manda la
+                            // lista de regimenes y que corresponde a cada uno.
+                            regimenes: planilla_regimen_1.REGIMENES, beneficios: (0, planilla_regimen_1.beneficiosDe)(cfg.regimen_laboral), 
                             // El periodo en curso y los anteriores, para que la pantalla no tenga
                             // que reimplementar las cuentas de calendario.
                             periodo_actual: (0, planilla_periodos_1.periodoDe)(hoy, cfg.frecuencia_pago, cfg.semana_empieza), periodos: (0, planilla_periodos_1.ultimosPeriodos)(hoy, cfg.frecuencia_pago, cfg.semana_empieza, 12) })];
@@ -120,21 +147,32 @@ function leerConfig(ctx) {
 }
 exports.leerConfig = leerConfig;
 function guardarConfig(ctx, body, autor) {
-    var _a, _b, _c;
+    var _a, _b, _c, _d;
     return __awaiter(this, void 0, void 0, function () {
-        var org, antes, frecuencia, semana, flag, nuevo, encendidos, frase, sede;
-        return __generator(this, function (_d) {
-            switch (_d.label) {
+        var org, antes, frecuencia, semana, regimen, cambioRegimen, porRegimen, flag, nuevo, encendidos, frase, sede;
+        return __generator(this, function (_e) {
+            switch (_e.label) {
                 case 0: return [4 /*yield*/, prisma.org.findUnique({ where: { idorg: ctx.idorg } })];
                 case 1:
-                    org = _d.sent();
+                    org = _e.sent();
                     antes = configDe(org);
                     frecuencia = (0, planilla_periodos_1.normalizarFrecuencia)((_a = body.frecuencia_pago) !== null && _a !== void 0 ? _a : antes.frecuencia_pago);
                     semana = (0, planilla_periodos_1.normalizarInicioSemana)((_b = body.semana_empieza) !== null && _b !== void 0 ? _b : antes.semana_empieza);
+                    regimen = (0, planilla_regimen_1.normalizarRegimen)((_c = body.regimen_laboral) !== null && _c !== void 0 ? _c : antes.regimen_laboral);
+                    cambioRegimen = regimen !== antes.regimen_laboral;
+                    porRegimen = cambioRegimen ? (0, planilla_regimen_1.interruptoresDe)(regimen) : {};
                     flag = function (campo) {
-                        return body[campo] === undefined ? antes[campo] : !!body[campo];
+                        if (body[campo] !== undefined) {
+                            return !!body[campo];
+                        }
+                        if (campo in porRegimen) {
+                            return porRegimen[campo];
+                        }
+                        return antes[campo];
                     };
                     nuevo = {
+                        regimen_laboral: regimen,
+                        rmv: body.rmv === undefined ? antes.rmv : (0, planilla_regimen_1.normalizarRmv)(body.rmv),
                         frecuencia_pago: frecuencia,
                         semana_empieza: semana,
                         usa_pensiones: flag('usa_pensiones'),
@@ -142,11 +180,15 @@ function guardarConfig(ctx, body, autor) {
                         usa_cts: flag('usa_cts'),
                         usa_gratificacion: flag('usa_gratificacion'),
                         usa_renta_quinta: flag('usa_renta_quinta'),
-                        usa_formato_legal: flag('usa_formato_legal')
+                        usa_formato_legal: flag('usa_formato_legal'),
+                        usa_sobretiempo: flag('usa_sobretiempo'),
+                        sobretiempo_min_umbral: body.sobretiempo_min_umbral === undefined
+                            ? antes.sobretiempo_min_umbral
+                            : normalizarUmbral(body.sobretiempo_min_umbral)
                     };
                     return [4 /*yield*/, prisma.org.update({ where: { idorg: ctx.idorg }, data: nuevo })];
                 case 2:
-                    _d.sent();
+                    _e.sent();
                     encendidos = function (c) {
                         return exports.INTERRUPTORES.filter(function (i) { return c[i.campo]; }).map(function (i) { return i.clave; }).join(', ') || 'ninguno';
                     };
@@ -158,17 +200,17 @@ function guardarConfig(ctx, body, autor) {
                     if (!(frase(antes) !== frase(nuevo))) return [3 /*break*/, 5];
                     return [4 /*yield*/, prisma.sede.findUnique({ where: { idsede: ctx.idsede } })];
                 case 3:
-                    sede = _d.sent();
+                    sede = _e.sent();
                     return [4 /*yield*/, (0, asistencia_bitacora_1.anotar)({
-                            idorg: ctx.idorg, idsede_restobar: (_c = sede === null || sede === void 0 ? void 0 : sede.idsede_restobar) !== null && _c !== void 0 ? _c : 0,
+                            idorg: ctx.idorg, idsede_restobar: (_d = sede === null || sede === void 0 ? void 0 : sede.idsede_restobar) !== null && _d !== void 0 ? _d : 0,
                             entidad: 'PLANILLA', accion: 'MODIFICA',
                             detalle: 'Planilla: ' + frase(antes) + ' -> ' + frase(nuevo),
                             anterior: antes,
                             nuevo: nuevo
                         }, autor)];
                 case 4:
-                    _d.sent();
-                    _d.label = 5;
+                    _e.sent();
+                    _e.label = 5;
                 case 5: return [2 /*return*/, leerConfig(ctx)];
             }
         });

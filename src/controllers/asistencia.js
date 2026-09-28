@@ -84,6 +84,10 @@ exports.publico = exports.datosDia = exports.contextoLaboral = void 0;
 var express = __importStar(require("express"));
 var crypto = __importStar(require("crypto"));
 var client_1 = require("@prisma/client");
+var limite_1 = require("../middleware/limite");
+var asistencia_limites_1 = require("../services/asistencia.limites");
+var planilla_costo_1 = require("../services/planilla.costo");
+var cambioTurno = __importStar(require("../services/asistencia.cambioturno"));
 var asistencia_calendario_1 = require("../services/asistencia.calendario");
 var asistencia_codigo_1 = require("../services/asistencia.codigo");
 var asistencia_gps_1 = require("../services/asistencia.gps");
@@ -852,6 +856,28 @@ calOp('/calendario/dias-cierre', function (t, req) { return cfg.guardarDiasCierr
 calOp('/calendario/feriados', function (t, req) { return cfg.listarFeriados(t, req.body.anio); });
 calOp('/calendario/feriado/guardar', function (t, req) { return cfg.guardarFeriado(t, req.body, autorPos(req)); });
 calOp('/calendario/feriado/:id/eliminar', function (t, req) { return cfg.eliminarFeriado(t, req.params.id, autorPos(req)); });
+/**
+ * Reinicia el contador de intentos del marcador.
+ *
+ * Hace falta de verdad: si el limite quedo corto y el marcador esta rechazando
+ * a gente que quiere irse, subir el numero en la configuracion no basta --
+ * el contador de este minuto ya esta lleno. Esto lo vacia en el acto.
+ *
+ * Va en la puerta del POS y no en la publica, por lo obvio: si cualquiera
+ * pudiera vaciar el contador, el limite no existiria.
+ */
+router.post('/limites/reiniciar', asinc(function (req, res) { return __awaiter(void 0, void 0, void 0, function () {
+    return __generator(this, function (_a) {
+        switch (_a.label) {
+            case 0: return [4 /*yield*/, resolverTenant(req.pos, req.body)];
+            case 1:
+                _a.sent();
+                (0, limite_1._reiniciarLimites)();
+                ok(res, { reiniciado: true });
+                return [2 /*return*/];
+        }
+    });
+}); }));
 calOp('/ausencias/alertas', function (t) { return ausencias.alertas(t); });
 calOp('/ausencias/registrar', function (t, req) { return ausencias.registrarAusencia(t, req.body, autorPos(req)); });
 calOp('/ausencias/baja', function (t, req) { return ausencias.darDeBaja(t, req.body, autorPos(req)); });
@@ -869,7 +895,7 @@ calOp('/bitacora', function (t, req) { return cfg.listarBitacora(t, req.body); }
 // puesta a mano tiene que ser visible en el reporte y en la planilla.
 var HHMM = /^([01]\d|2[0-3]):[0-5]\d$/;
 router.post('/marca/manual', asinc(function (req, res) { return __awaiter(void 0, void 0, void 0, function () {
-    var t, idcolaborador, tipo, hora, motivo, fecha, c, corte, momento, siguiente, alterno, esperada, tardanza, datos, previa, creada;
+    var t, idcolaborador, tipo, hora, motivo, fecha, c, corte, momento, siguiente, alterno, esperada, tardanza, datos, delDia, previa, creada;
     var _a;
     return __generator(this, function (_b) {
         switch (_b.label) {
@@ -918,7 +944,7 @@ router.post('/marca/manual', asinc(function (req, res) { return __awaiter(void 0
                         return [2 /*return*/, mal(res, "Las ".concat(hora, " no pertenecen al dia ").concat(fecha, " (el dia operativo empieza a las ").concat(corte.slice(0, 5), ")."))];
                     }
                 }
-                esperada = tipo === 'ENTRADA' ? (0, asistencia_calendario_1.horaEsperada)(c.horario_semanal, fecha) : null;
+                esperada = tipo === 'ENTRADA' ? (0, asistencia_calendario_1.horaEsperada)(c.horario_semanal, fecha, momento) : null;
                 tardanza = tipo === 'ENTRADA' ? (0, asistencia_calendario_1.tardanzaMin)(esperada, momento, (_a = c.tolerancia_min) !== null && _a !== void 0 ? _a : 10) : null;
                 datos = {
                     idcolaborador: idcolaborador,
@@ -933,11 +959,14 @@ router.post('/marca/manual', asinc(function (req, res) { return __awaiter(void 0
                     manual_idusuario_restobar: req.pos.idusuario,
                     manual_motivo: motivo
                 };
-                return [4 /*yield*/, prisma.asistencia_marca.findFirst({
+                return [4 /*yield*/, prisma.asistencia_marca.findMany({
                         where: { idcolaborador: idcolaborador, fecha_local: (0, asistencia_calendario_1.fechaSql)(fecha + ' 00:00:00'), tipo: tipo }
                     })];
             case 4:
-                previa = _b.sent();
+                delDia = _b.sent();
+                previa = delDia.find(function (m) {
+                    return (0, asistencia_calendario_1.horaEsperada)(c.horario_semanal, fecha, (0, asistencia_calendario_1.aTextoLima)(m.marcada_at) || undefined) === esperada;
+                });
                 if (!previa) return [3 /*break*/, 6];
                 return [4 /*yield*/, prisma.asistencia_marca.update({ where: { idasistencia_marca: previa.idasistencia_marca }, data: datos })];
             case 5:
@@ -947,6 +976,87 @@ router.post('/marca/manual', asinc(function (req, res) { return __awaiter(void 0
             case 7:
                 creada = _b.sent();
                 ok(res, { accion: 'CREADA', idasistencia_marca: creada.idasistencia_marca, hora: hora });
+                return [2 /*return*/];
+        }
+    });
+}); }));
+/**
+ * Cuanto cuesta el personal del periodo.
+ *
+ * La usa el dashboard a traves de `api-restobar`. Es la MISMA funcion que la
+ * pantalla de Recursos Humanos: si el dashboard hiciera su propia cuenta,
+ * tarde o temprano mostraria un costo distinto al de la planilla y no habria
+ * forma de saber cual esta bien.
+ *
+ * NO CREA EL TENANT. A diferencia del resto de esta puerta, aqui no se da de
+ * alta nada: alguien mirando un indicador no puede provocar que se cree una
+ * empresa en Recursos Humanos. Si el local todavia no usa el modulo, se dice y
+ * listo.
+ */
+router.post('/costo', asinc(function (req, res) { return __awaiter(void 0, void 0, void 0, function () {
+    var org, sede, _a, _b, _c, _d;
+    return __generator(this, function (_e) {
+        switch (_e.label) {
+            case 0: return [4 /*yield*/, prisma.org.findFirst({ where: { idorg_restobar: req.pos.ido, estado: '0' } })];
+            case 1:
+                org = _e.sent();
+                _a = org;
+                if (!_a) return [3 /*break*/, 3];
+                return [4 /*yield*/, prisma.sede.findFirst({
+                        where: { idorg: org.idorg, idsede_restobar: req.pos.idsede }
+                    })];
+            case 2:
+                _a = (_e.sent());
+                _e.label = 3;
+            case 3:
+                sede = _a;
+                if (!org || !sede) {
+                    return [2 /*return*/, ok(res, { sin_rrhh: true })];
+                }
+                _b = ok;
+                _c = [res];
+                _d = [{ sin_rrhh: false }];
+                return [4 /*yield*/, (0, planilla_costo_1.costoDePersonal)({ idorg: org.idorg, idsede: sede.idsede }, req.body)];
+            case 4:
+                _b.apply(void 0, _c.concat([__assign.apply(void 0, _d.concat([_e.sent()]))]));
+                return [2 /*return*/];
+        }
+    });
+}); }));
+/**
+ * El costo de TODAS las sedes de la empresa, para compararlas.
+ *
+ * La empresa sale del TOKEN, nunca del cuerpo: si viniera del cliente, cambiar
+ * un numero mostraria la planilla de otro negocio. Las sedes se listan desde la
+ * base a partir de esa empresa, asi que no hay nada que verificar despues --
+ * no se puede pedir una sede ajena porque no se piden sedes.
+ *
+ * Es para el dashboard: un dueno con varios locales quiere ver cual tiene el
+ * personal mas caro, y eso no se puede responder mirando un local por vez.
+ */
+router.post('/costo-sedes', asinc(function (req, res) { return __awaiter(void 0, void 0, void 0, function () {
+    var org, sedes, _a, _b, _c;
+    return __generator(this, function (_d) {
+        switch (_d.label) {
+            case 0: return [4 /*yield*/, prisma.org.findFirst({ where: { idorg_restobar: req.pos.ido, estado: '0' } })];
+            case 1:
+                org = _d.sent();
+                if (!org) {
+                    return [2 /*return*/, ok(res, { sin_rrhh: true, sedes: [] })];
+                }
+                return [4 /*yield*/, prisma.sede.findMany({
+                        where: { idorg: org.idorg, estado: '0' },
+                        select: { idsede: true, idsede_restobar: true, nombre: true },
+                        orderBy: { nombre: 'asc' }
+                    })];
+            case 2:
+                sedes = _d.sent();
+                _a = ok;
+                _b = [res];
+                _c = [{ sin_rrhh: false }];
+                return [4 /*yield*/, (0, planilla_costo_1.costoDeSedes)(org.idorg, sedes, req.body)];
+            case 3:
+                _a.apply(void 0, _b.concat([__assign.apply(void 0, _c.concat([_d.sent()]))]));
                 return [2 /*return*/];
         }
     });
@@ -1078,7 +1188,40 @@ exports.publico = express.Router();
  * Lo que ve el celular ANTES de confirmar: a quien va a quedar atado.
  * Si dice otro nombre, el trabajador se da cuenta antes de enrolar.
  */
-exports.publico.post('/enrolar/info', asinc(function (_req, res) { return __awaiter(void 0, void 0, void 0, function () {
+// Vincular un celular pasa una vez por persona.
+/**
+ * El tope de intentos de este local, para cada endpoint publico.
+ *
+ * Cada endpoint publico llega al local por lo unico que recibe: unos mandan
+ * idkiosko, `/codigo` manda el token de la pantalla y los de enrolar mandan el
+ * codigo de invitacion. Las tres busquedas van por indice y con cache, asi que
+ * averiguar el limite cuesta menos que lo que el limite protege.
+ */
+var topeDe = function (campo) {
+    return function (req) { return __awaiter(void 0, void 0, void 0, function () { var _a; return __generator(this, function (_b) {
+        switch (_b.label) {
+            case 0: return [4 /*yield*/, (0, asistencia_limites_1.limitesDeKiosko)(Number((_a = req.body) === null || _a === void 0 ? void 0 : _a.idkiosko) || 0)];
+            case 1: return [2 /*return*/, (_b.sent())[campo]];
+        }
+    }); }); };
+};
+var topePorToken = function (campo) {
+    return function (req) { return __awaiter(void 0, void 0, void 0, function () { var _a; return __generator(this, function (_b) {
+        switch (_b.label) {
+            case 0: return [4 /*yield*/, (0, asistencia_limites_1.limitesDeToken)(String(((_a = req.body) === null || _a === void 0 ? void 0 : _a.kiosko_token) || ''))];
+            case 1: return [2 /*return*/, (_b.sent())[campo]];
+        }
+    }); }); };
+};
+var topePorInvitacion = function (campo) {
+    return function (req) { return __awaiter(void 0, void 0, void 0, function () { var _a; return __generator(this, function (_b) {
+        switch (_b.label) {
+            case 0: return [4 /*yield*/, (0, asistencia_limites_1.limitesDeInvitacion)(String(((_a = req.body) === null || _a === void 0 ? void 0 : _a.invitacion) || ''))];
+            case 1: return [2 /*return*/, (_b.sent())[campo]];
+        }
+    }); }); };
+};
+exports.publico.post('/enrolar/info', (0, limite_1.limite)(topePorInvitacion('enrolar_info')), asinc(function (_req, res) { return __awaiter(void 0, void 0, void 0, function () {
     var c, yaTiene;
     return __generator(this, function (_a) {
         switch (_a.label) {
@@ -1102,7 +1245,8 @@ exports.publico.post('/enrolar/info', asinc(function (_req, res) { return __awai
     });
 }); }));
 /** Confirma: quema la invitacion y entrega el token que el POS guarda como cookie. */
-exports.publico.post('/enrolar/confirmar', asinc(function (req, res) { return __awaiter(void 0, void 0, void 0, function () {
+// Idem, y ademas consume la invitacion: mas intentos que este numero son alguien probando uuids.
+exports.publico.post('/enrolar/confirmar', (0, limite_1.limite)(topePorInvitacion('enrolar_confirmar')), asinc(function (req, res) { return __awaiter(void 0, void 0, void 0, function () {
     var c, token, ahora, expira;
     return __generator(this, function (_a) {
         switch (_a.label) {
@@ -1407,7 +1551,9 @@ function kioskoPorToken(token) {
  * Codigo que la pantalla debe mostrar ahora. Lo pide cada pocos segundos.
  * Devuelve tambien los segundos que le quedan, para el contador visual.
  */
-exports.publico.post('/codigo', asinc(function (req, res) { return __awaiter(void 0, void 0, void 0, function () {
+// La pantalla lo pide cada 15 s: 4 por minuto de uso normal. El tope sale del
+// local del token, para dejar margen a varias pantallas detras de la misma IP.
+exports.publico.post('/codigo', (0, limite_1.limite)(topePorToken('codigo')), asinc(function (req, res) { return __awaiter(void 0, void 0, void 0, function () {
     var k;
     return __generator(this, function (_a) {
         switch (_a.label) {
@@ -1450,7 +1596,8 @@ exports.publico.post('/codigo', asinc(function (req, res) { return __awaiter(voi
  * tiene que pedirle la ubicacion al navegador: pedir permiso de GPS cuando la
  * sede no lo exige es molesto y entrena a la gente a decir que no.
  */
-exports.publico.post('/marcar/info', asinc(function (req, res) { return __awaiter(void 0, void 0, void 0, function () {
+// Se consulta una vez antes de cada marca.
+exports.publico.post('/marcar/info', (0, limite_1.limite)(topeDe('marcar_info')), asinc(function (req, res) { return __awaiter(void 0, void 0, void 0, function () {
     var k, s, exige;
     var _a;
     return __generator(this, function (_b) {
@@ -1468,6 +1615,165 @@ exports.publico.post('/marcar/info', asinc(function (req, res) { return __awaite
                 s = _b.sent();
                 exige = !!((s === null || s === void 0 ? void 0 : s.gps_activo) && (s === null || s === void 0 ? void 0 : s.gps_lat) !== null && (s === null || s === void 0 ? void 0 : s.gps_lng) !== null);
                 ok(res, { gps_requerido: exige, radio_m: (_a = s === null || s === void 0 ? void 0 : s.gps_radio_m) !== null && _a !== void 0 ? _a : 150 });
+                return [2 /*return*/];
+        }
+    });
+}); }));
+/**
+ * Quien es el dueno de este celular, y en que dia operativo esta.
+ *
+ * Misma resolucion que usa `/marcar`: el token del dispositivo identifica a la
+ * persona. Lo que NO se pide aqui es el codigo del kiosko, porque ese codigo
+ * prueba PRESENCIA -- necesaria para marcar, no para declarar un acuerdo que
+ * ya existe entre dos companeros.
+ */
+function celularDe(req) {
+    var _a;
+    return __awaiter(this, void 0, void 0, function () {
+        var dispositivo, disp, c, sede, org, corteRaw, corte;
+        return __generator(this, function (_b) {
+            switch (_b.label) {
+                case 0:
+                    dispositivo = (_a = req.body) === null || _a === void 0 ? void 0 : _a.dispositivo;
+                    if (!dispositivo || typeof dispositivo !== 'string' || dispositivo.length !== 64) {
+                        return [2 /*return*/, null];
+                    }
+                    return [4 /*yield*/, prisma.colaborador_dispositivo.findFirst({
+                            where: { token_hash: sha256(dispositivo), activo: true }
+                        })];
+                case 1:
+                    disp = _b.sent();
+                    if (!disp) {
+                        return [2 /*return*/, null];
+                    }
+                    if (new Date(disp.expira_at).getTime() < Date.now()) {
+                        return [2 /*return*/, null];
+                    }
+                    return [4 /*yield*/, prisma.colaborador.findUnique({ where: { idcolaborador: disp.idcolaborador } })];
+                case 2:
+                    c = _b.sent();
+                    if (!c || c.estado !== 0) {
+                        return [2 /*return*/, null];
+                    }
+                    return [4 /*yield*/, prisma.sede.findUnique({ where: { idsede: c.idsede } })];
+                case 3:
+                    sede = _b.sent();
+                    if (!sede) {
+                        return [2 /*return*/, null];
+                    }
+                    return [4 /*yield*/, prisma.org.findUnique({ where: { idorg: c.idorg } })];
+                case 4:
+                    org = _b.sent();
+                    corteRaw = org === null || org === void 0 ? void 0 : org.asis_hora_corte;
+                    corte = corteRaw instanceof Date
+                        ? corteRaw.toISOString().slice(11, 19)
+                        : String(corteRaw || '05:00:00');
+                    return [2 /*return*/, {
+                            idcolaborador: c.idcolaborador,
+                            idorg: c.idorg,
+                            idsede: c.idsede,
+                            idsede_restobar: sede.idsede_restobar,
+                            fecha: (0, asistencia_calendario_1.diaOperativo)(corte, (0, asistencia_calendario_1.ahoraLima)())
+                        }];
+            }
+        });
+    });
+}
+/**
+ * A quienes puede decir que esta cubriendo.
+ *
+ * Solo aparecen los que hoy tenian que trabajar y no vinieron. Ofrecer la
+ * lista entera del local invitaria a poner cualquier nombre.
+ */
+exports.publico.post('/cambio-turno/candidatos', (0, limite_1.limite)(asistencia_limites_1.LIMITES_POR_DEFECTO.marcar_info), asinc(function (req, res) { return __awaiter(void 0, void 0, void 0, function () {
+    var d, _a, _b;
+    var _c;
+    return __generator(this, function (_d) {
+        switch (_d.label) {
+            case 0: return [4 /*yield*/, celularDe(req)];
+            case 1:
+                d = _d.sent();
+                if (!d) {
+                    return [2 /*return*/, mal(res, 'Este celular no esta activado.', 403)];
+                }
+                _a = ok;
+                _b = [res];
+                _c = {
+                    fecha: d.fecha
+                };
+                return [4 /*yield*/, cambioTurno.candidatos(d.idorg, d.idsede, d.idsede_restobar, d.idcolaborador, d.fecha)];
+            case 2:
+                _a.apply(void 0, _b.concat([(_c.candidatos = _d.sent(),
+                        _c)]));
+                return [2 /*return*/];
+        }
+    });
+}); }));
+/** Lo propone el que vino a cubrir. Queda pendiente hasta que el otro confirme. */
+exports.publico.post('/cambio-turno/proponer', (0, limite_1.limite)(asistencia_limites_1.LIMITES_POR_DEFECTO.marcar), asinc(function (req, res) { return __awaiter(void 0, void 0, void 0, function () {
+    var d, aQuien, _a, _b;
+    return __generator(this, function (_c) {
+        switch (_c.label) {
+            case 0: return [4 /*yield*/, celularDe(req)];
+            case 1:
+                d = _c.sent();
+                if (!d) {
+                    return [2 /*return*/, mal(res, 'Este celular no esta activado.', 403)];
+                }
+                aQuien = Number(req.body.idcolaborador_falta) || 0;
+                if (!aQuien) {
+                    return [2 /*return*/, mal(res, 'Falta decir a quien estas cubriendo.')];
+                }
+                _a = ok;
+                _b = [res];
+                return [4 /*yield*/, cambioTurno.proponer(d.idorg, d.idsede_restobar, d.idsede, d.idcolaborador, aQuien, d.fecha, Number(req.body.idmarca) || null)];
+            case 2:
+                _a.apply(void 0, _b.concat([_c.sent()]));
+                return [2 /*return*/];
+        }
+    });
+}); }));
+/** Lo que este celular tiene para confirmar, y su respuesta. */
+exports.publico.post('/cambio-turno/pendientes', (0, limite_1.limite)(asistencia_limites_1.LIMITES_POR_DEFECTO.marcar_info), asinc(function (req, res) { return __awaiter(void 0, void 0, void 0, function () {
+    var d, _a, _b;
+    var _c;
+    return __generator(this, function (_d) {
+        switch (_d.label) {
+            case 0: return [4 /*yield*/, celularDe(req)];
+            case 1:
+                d = _d.sent();
+                if (!d) {
+                    return [2 /*return*/, mal(res, 'Este celular no esta activado.', 403)];
+                }
+                _a = ok;
+                _b = [res];
+                _c = {};
+                return [4 /*yield*/, cambioTurno.pendientesDe(d.idcolaborador)];
+            case 2:
+                _a.apply(void 0, _b.concat([(_c.pendientes = _d.sent(), _c)]));
+                return [2 /*return*/];
+        }
+    });
+}); }));
+exports.publico.post('/cambio-turno/resolver', (0, limite_1.limite)(asistencia_limites_1.LIMITES_POR_DEFECTO.marcar), asinc(function (req, res) { return __awaiter(void 0, void 0, void 0, function () {
+    var d, idcambio, _a, _b;
+    return __generator(this, function (_c) {
+        switch (_c.label) {
+            case 0: return [4 /*yield*/, celularDe(req)];
+            case 1:
+                d = _c.sent();
+                if (!d) {
+                    return [2 /*return*/, mal(res, 'Este celular no esta activado.', 403)];
+                }
+                idcambio = Number(req.body.idcambio) || 0;
+                if (!idcambio) {
+                    return [2 /*return*/, mal(res, 'Falta el cambio.')];
+                }
+                _a = ok;
+                _b = [res];
+                return [4 /*yield*/, cambioTurno.resolver(d.idcolaborador, idcambio, !!req.body.acepta)];
+            case 2:
+                _a.apply(void 0, _b.concat([_c.sent()]));
                 return [2 /*return*/];
         }
     });
@@ -1499,8 +1805,9 @@ function puertaCerrada(dl, politica) {
     }
     return null;
 }
-exports.publico.post('/marcar', asinc(function (req, res) { return __awaiter(void 0, void 0, void 0, function () {
-    var idkiosko, dispositivo, k, disp, c, sedeGps, gps, lectura, v, org, corte, ahora, fecha, delDia, entrada, salida, nombre, ultima, tipo, nota, ctx, dl, puerta, esperada, tardanza;
+// Marcar es algo que se hace dos veces al dia. 40 por minuto cubre un turno entero saliendo junto y nada mas.
+exports.publico.post('/marcar', (0, limite_1.limite)(topeDe('marcar')), asinc(function (req, res) { return __awaiter(void 0, void 0, void 0, function () {
+    var idkiosko, dispositivo, k, disp, c, sedeGps, gps, lectura, v, org, corte, ahora, fecha, delDia, nombre, ultima, tope, tipo, nota, ctx, dl, puerta, esperada, tardanza;
     var _a, _b, _c, _d;
     return __generator(this, function (_e) {
         switch (_e.label) {
@@ -1570,8 +1877,6 @@ exports.publico.post('/marcar', asinc(function (req, res) { return __awaiter(voi
                     })];
             case 6:
                 delDia = _e.sent();
-                entrada = delDia.find(function (m) { return m.tipo === 'ENTRADA'; });
-                salida = delDia.find(function (m) { return m.tipo === 'SALIDA'; });
                 nombre = ((c.nombres || '') + ' ' + (c.apellidos || '')).trim();
                 ultima = delDia.length ? delDia[delDia.length - 1] : null;
                 if (ultima && (Date.parse(ahora + 'Z') - new Date(ultima.marcada_at).getTime()) < 2 * 60000) {
@@ -1581,13 +1886,14 @@ exports.publico.post('/marcar', asinc(function (req, res) { return __awaiter(voi
                             mensaje: 'Ya registramos tu ' + ultima.tipo.toLowerCase() + ' hace un momento.'
                         })];
                 }
-                if (entrada && salida) {
+                tope = Math.max(2, (0, asistencia_calendario_1.tramosDe)(c.horario_semanal, fecha).length * 2);
+                if (delDia.length >= tope) {
                     return [2 /*return*/, ok(res, {
                             resultado: 'COMPLETO', nombres: nombre,
-                            mensaje: 'Ya marcaste entrada y salida hoy. Si necesitas otra marca, pide al administrador.'
+                            mensaje: 'Ya registraste todas tus marcas de hoy. Si necesitas otra, pide al administrador.'
                         })];
                 }
-                tipo = entrada ? 'SALIDA' : 'ENTRADA';
+                tipo = (ultima && ultima.tipo === 'ENTRADA') ? 'SALIDA' : 'ENTRADA';
                 nota = null;
                 if (!(tipo === 'ENTRADA')) return [3 /*break*/, 10];
                 return [4 /*yield*/, (0, asistencia_config_1.contextoLaboral)(c.idorg, sedeGps.idsede, fecha, fecha)];
@@ -1637,7 +1943,7 @@ exports.publico.post('/marcar', asinc(function (req, res) { return __awaiter(voi
                 }
                 _e.label = 10;
             case 10:
-                esperada = tipo === 'ENTRADA' ? (0, asistencia_calendario_1.horaEsperada)(c.horario_semanal, fecha) : null;
+                esperada = tipo === 'ENTRADA' ? (0, asistencia_calendario_1.horaEsperada)(c.horario_semanal, fecha, ahora) : null;
                 tardanza = tipo === 'ENTRADA' ? (0, asistencia_calendario_1.tardanzaMin)(esperada, ahora, (_c = c.tolerancia_min) !== null && _c !== void 0 ? _c : 10) : null;
                 return [4 /*yield*/, prisma.asistencia_marca.create({
                         data: {
@@ -1666,8 +1972,12 @@ exports.publico.post('/marcar', asinc(function (req, res) { return __awaiter(voi
                     nombres: nombre,
                     hora: ahora.slice(11, 16),
                     tardanza_min: tardanza,
-                    horas: tipo === 'SALIDA' && entrada
-                        ? (0, asistencia_calendario_1.horasTurno)(new Date(entrada.marcada_at).toISOString().slice(0, 19).replace('T', ' '), ahora)
+                    // Las horas del TRAMO que se acaba de cerrar, no las del dia entero.
+                    // `ultima` es la entrada que esta salida cierra (por eso el tipo salio
+                    // SALIDA). Con turno corrido es la unica entrada y da lo mismo de
+                    // siempre; con turno partido evita contar el hueco del mediodia.
+                    horas: tipo === 'SALIDA' && ultima
+                        ? (0, asistencia_calendario_1.horasTurno)(new Date(ultima.marcada_at).toISOString().slice(0, 19).replace('T', ' '), ahora)
                         : null,
                     nota: nota
                 });

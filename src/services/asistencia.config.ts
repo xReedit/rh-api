@@ -15,6 +15,7 @@ import {
     validarHorario, ahoraLima, fechaSql, aTextoLima, horaEsperada, diaSemana
 } from "./asistencia.calendario";
 import { resolverDia, Excepcion as ExcepcionDia } from "./asistencia.dialaboral";
+import { olvidarCache } from "./asistencia.limites";
 import { anotar, Autor, detalleHorario, detalleExcepcion, horarioATexto } from "./asistencia.bitacora";
 
 const prisma = new PrismaClient();
@@ -611,9 +612,18 @@ export async function leerConfiguracion(ctx: Ctx, anioPedido?: any) {
         })).map((e: any) => aTextoLima(e.fecha)!.slice(0, 10))
     );
 
+    // Cuanta gente marca a la vez. Define el limite de intentos del marcador:
+    // en un local todas las marcas salen por la misma IP, asi que el numero que
+    // le sobra a un restaurante chico le queda corto a uno grande.
+    const personalActivo = await prisma.colaborador.count({
+        where: { idorg: ctx.idorg, idsede: ctx.idsede, estado: 0 } as any
+    });
+
     return {
         anio,
         configurado: !!sede?.asis_configurado,
+        marcador_personas: sede?.marcador_personas ?? null,
+        marcador_personas_auto: personalActivo,
         dias_cierre: String(sede?.dias_cierre || '').split(',').map((d: string) => d.trim()).filter(Boolean),
         ...pol,
         feriados: feriados.map(f => {
@@ -727,15 +737,29 @@ export async function guardarConfiguracion(ctx: Ctx, body: any, autor: Autor) {
     const feriadoPct = pct(body.feriado_recargo_pct, 0);
     const descansoPct = pct(body.descanso_recargo_pct, 100);
 
+    // null = automatico (se cuenta el personal cargado). Se topa en 300 porque
+    // mas que eso ya no protege de nada, y en 1 porque un cero dejaria al local
+    // sin poder marcar.
+    const personasPedidas = Number(body.marcador_personas);
+    const marcadorPersonas = Number.isFinite(personasPedidas) && personasPedidas > 0
+        ? Math.min(Math.round(personasPedidas), 300)
+        : null;
+
     await prisma.sede.update({
         where: { idsede: ctx.idsede },
         data: {
             feriado_abre: feriadoAbre,
             feriado_recargo_pct: feriadoPct,
             descanso_trabajado: descanso as any,
-            descanso_recargo_pct: descansoPct
+            descanso_recargo_pct: descansoPct,
+            marcador_personas: marcadorPersonas
         } as any
     });
+
+    // El limitador cachea este valor cinco minutos. Se olvida al guardar para
+    // que el cambio se vea ya: quien lo sube es porque le esta rechazando
+    // marcas AHORA, y esperar cinco minutos seria seguir con el problema.
+    olvidarCache();
 
     if (hayListaFeriados) {
         await sincronizarFeriados(ctx, trabajados, todosTrabajados, anioDe(body, trabajados), autor);

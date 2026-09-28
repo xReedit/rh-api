@@ -13,9 +13,13 @@ import * as express from "express";
 import * as crypto from "crypto";
 import { PrismaClient, Prisma } from "@prisma/client";
 import { PosRequest } from "../middleware/pos.auth";
+import { limite, _reiniciarLimites } from "../middleware/limite";
+import { limitesDeKiosko, limitesDeToken, limitesDeInvitacion, LIMITES_POR_DEFECTO } from "../services/asistencia.limites";
+import { costoDePersonal, costoDeSedes } from "../services/planilla.costo";
+import * as cambioTurno from "../services/asistencia.cambioturno";
 import {
     validarHorario, ahoraLima, fechaSql, diaOperativo,
-    horaEsperada, tardanzaMin, horasTurno, aTextoLima, minutosDesde, diaSemana
+    horaEsperada, tardanzaMin, horasTurno, aTextoLima, minutosDesde, diaSemana, tramosDe
 } from "../services/asistencia.calendario";
 import { codigoValido, calcularCodigo, ventanaActual, segundosRestantes, VENTANA_SEG } from "../services/asistencia.codigo";
 import { verificarUbicacion } from "../services/asistencia.gps";
@@ -612,6 +616,22 @@ calOp('/calendario/dias-cierre', (t, req) => cfg.guardarDiasCierre(t, req.body.d
 calOp('/calendario/feriados', (t, req) => cfg.listarFeriados(t, req.body.anio));
 calOp('/calendario/feriado/guardar', (t, req) => cfg.guardarFeriado(t, req.body, autorPos(req)));
 calOp('/calendario/feriado/:id/eliminar', (t, req) => cfg.eliminarFeriado(t, req.params.id, autorPos(req)));
+/**
+ * Reinicia el contador de intentos del marcador.
+ *
+ * Hace falta de verdad: si el limite quedo corto y el marcador esta rechazando
+ * a gente que quiere irse, subir el numero en la configuracion no basta --
+ * el contador de este minuto ya esta lleno. Esto lo vacia en el acto.
+ *
+ * Va en la puerta del POS y no en la publica, por lo obvio: si cualquiera
+ * pudiera vaciar el contador, el limite no existiria.
+ */
+router.post('/limites/reiniciar', asinc(async (req: PosRequest, res: any) => {
+    await resolverTenant(req.pos, req.body);
+    _reiniciarLimites();
+    ok(res, { reiniciado: true });
+}));
+
 calOp('/ausencias/alertas', (t) => ausencias.alertas(t));
 calOp('/ausencias/registrar', (t, req) => ausencias.registrarAusencia(t, req.body, autorPos(req)));
 calOp('/ausencias/baja', (t, req) => ausencias.darDeBaja(t, req.body, autorPos(req)));
@@ -664,7 +684,10 @@ router.post('/marca/manual', asinc(async (req: PosRequest, res: any) => {
         else { return mal(res, `Las ${hora} no pertenecen al dia ${fecha} (el dia operativo empieza a las ${corte.slice(0, 5)}).`); }
     }
 
-    const esperada = tipo === 'ENTRADA' ? horaEsperada(c.horario_semanal as any, fecha) : null;
+    // Se pasa el momento de la marca para que, en un turno partido, la tardanza
+    // se mida contra la entrada a la que la persona venia y no siempre contra
+    // la primera del dia. Ver horaEsperada en asistencia.calendario.
+    const esperada = tipo === 'ENTRADA' ? horaEsperada(c.horario_semanal as any, fecha, momento) : null;
     const tardanza = tipo === 'ENTRADA' ? tardanzaMin(esperada, momento, c.tolerancia_min ?? 10) : null;
 
     const datos: any = {
@@ -681,11 +704,26 @@ router.post('/marca/manual', asinc(async (req: PosRequest, res: any) => {
         manual_motivo: motivo
     };
 
-    // ux_marca_dia impide dos marcas del mismo tipo en el dia: si ya hay una,
-    // esto es una CORRECCION y se actualiza en lugar de fallar.
-    const previa = await prisma.asistencia_marca.findFirst({
+    // UNA MARCA DE CADA TIPO POR TRAMO, no por dia.
+    //
+    // Antes habia un indice unico por (persona, dia, tipo) y volver a mandar
+    // una ENTRADA se entendia como corregir la del dia. Con turno partido eso
+    // deja de servir: hay dos entradas legitimas, y corregir la de la noche no
+    // puede pisar la del mediodia.
+    //
+    // La regla nueva es la que siempre se quiso decir: se corrige la marca del
+    // MISMO TRAMO. Dos marcas son del mismo tramo si `horaEsperada` les da la
+    // misma hora. Con turno corrido hay un solo tramo y esto se comporta
+    // exactamente como antes; con turno partido, cada mitad es independiente.
+    //
+    // Sin horario, `horaEsperada` da null para las dos y tambien se corrige:
+    // es lo correcto para quien no tiene horario cargado.
+    const delDia = await prisma.asistencia_marca.findMany({
         where: { idcolaborador, fecha_local: fechaSql(fecha + ' 00:00:00'), tipo: tipo as any }
     });
+
+    const previa = delDia.find((m: any) =>
+        horaEsperada(c.horario_semanal as any, fecha, aTextoLima(m.marcada_at) || undefined) === esperada);
 
     if (previa) {
         await prisma.asistencia_marca.update({ where: { idasistencia_marca: previa.idasistencia_marca }, data: datos });
@@ -694,6 +732,59 @@ router.post('/marca/manual', asinc(async (req: PosRequest, res: any) => {
 
     const creada = await prisma.asistencia_marca.create({ data: datos });
     ok(res, { accion: 'CREADA', idasistencia_marca: creada.idasistencia_marca, hora });
+}));
+
+/**
+ * Cuanto cuesta el personal del periodo.
+ *
+ * La usa el dashboard a traves de `api-restobar`. Es la MISMA funcion que la
+ * pantalla de Recursos Humanos: si el dashboard hiciera su propia cuenta,
+ * tarde o temprano mostraria un costo distinto al de la planilla y no habria
+ * forma de saber cual esta bien.
+ *
+ * NO CREA EL TENANT. A diferencia del resto de esta puerta, aqui no se da de
+ * alta nada: alguien mirando un indicador no puede provocar que se cree una
+ * empresa en Recursos Humanos. Si el local todavia no usa el modulo, se dice y
+ * listo.
+ */
+router.post('/costo', asinc(async (req: PosRequest, res: any) => {
+    const org = await prisma.org.findFirst({ where: { idorg_restobar: req.pos.ido, estado: '0' } });
+    const sede = org && await prisma.sede.findFirst({
+        where: { idorg: org.idorg, idsede_restobar: req.pos.idsede }
+    });
+
+    if (!org || !sede) {
+        return ok(res, { sin_rrhh: true });
+    }
+
+    ok(res, {
+        sin_rrhh: false,
+        ...await costoDePersonal({ idorg: org.idorg, idsede: sede.idsede } as any, req.body)
+    });
+}));
+
+/**
+ * El costo de TODAS las sedes de la empresa, para compararlas.
+ *
+ * La empresa sale del TOKEN, nunca del cuerpo: si viniera del cliente, cambiar
+ * un numero mostraria la planilla de otro negocio. Las sedes se listan desde la
+ * base a partir de esa empresa, asi que no hay nada que verificar despues --
+ * no se puede pedir una sede ajena porque no se piden sedes.
+ *
+ * Es para el dashboard: un dueno con varios locales quiere ver cual tiene el
+ * personal mas caro, y eso no se puede responder mirando un local por vez.
+ */
+router.post('/costo-sedes', asinc(async (req: PosRequest, res: any) => {
+    const org = await prisma.org.findFirst({ where: { idorg_restobar: req.pos.ido, estado: '0' } });
+    if (!org) { return ok(res, { sin_rrhh: true, sedes: [] }); }
+
+    const sedes = await prisma.sede.findMany({
+        where: { idorg: org.idorg, estado: '0' } as any,
+        select: { idsede: true, idsede_restobar: true, nombre: true },
+        orderBy: { nombre: 'asc' }
+    });
+
+    ok(res, { sin_rrhh: false, ...await costoDeSedes(org.idorg, sedes as any, req.body) });
 }));
 
 /** Borra una marca. Solo de esta empresa, y pidiendo motivo igual que al crear. */
@@ -780,7 +871,26 @@ export const publico = express.Router();
  * Lo que ve el celular ANTES de confirmar: a quien va a quedar atado.
  * Si dice otro nombre, el trabajador se da cuenta antes de enrolar.
  */
-publico.post('/enrolar/info', asinc(async (_req: any, res: any) => {
+// Vincular un celular pasa una vez por persona.
+
+/**
+ * El tope de intentos de este local, para cada endpoint publico.
+ *
+ * Cada endpoint publico llega al local por lo unico que recibe: unos mandan
+ * idkiosko, `/codigo` manda el token de la pantalla y los de enrolar mandan el
+ * codigo de invitacion. Las tres busquedas van por indice y con cache, asi que
+ * averiguar el limite cuesta menos que lo que el limite protege.
+ */
+const topeDe = (campo: keyof typeof LIMITES_POR_DEFECTO) =>
+    async (req: any) => (await limitesDeKiosko(Number(req.body?.idkiosko) || 0))[campo];
+
+const topePorToken = (campo: keyof typeof LIMITES_POR_DEFECTO) =>
+    async (req: any) => (await limitesDeToken(String(req.body?.kiosko_token || '')))[campo];
+
+const topePorInvitacion = (campo: keyof typeof LIMITES_POR_DEFECTO) =>
+    async (req: any) => (await limitesDeInvitacion(String(req.body?.invitacion || '')))[campo];
+
+publico.post('/enrolar/info', limite(topePorInvitacion('enrolar_info')), asinc(async (_req: any, res: any) => {
     const c = await invitacionVigente(_req.body.invitacion);
     if (!c) { return mal(res, 'Este codigo ya no es valido. Pide al administrador que genere uno nuevo.', 410); }
 
@@ -795,7 +905,8 @@ publico.post('/enrolar/info', asinc(async (_req: any, res: any) => {
 }));
 
 /** Confirma: quema la invitacion y entrega el token que el POS guarda como cookie. */
-publico.post('/enrolar/confirmar', asinc(async (req: any, res: any) => {
+// Idem, y ademas consume la invitacion: mas intentos que este numero son alguien probando uuids.
+publico.post('/enrolar/confirmar', limite(topePorInvitacion('enrolar_confirmar')), asinc(async (req: any, res: any) => {
     const c = await invitacionVigente(req.body.invitacion);
     if (!c) { return mal(res, 'Este codigo ya no es valido. Pide al administrador que genere uno nuevo.', 410); }
 
@@ -1020,7 +1131,9 @@ async function kioskoPorToken(token: any) {
  * Codigo que la pantalla debe mostrar ahora. Lo pide cada pocos segundos.
  * Devuelve tambien los segundos que le quedan, para el contador visual.
  */
-publico.post('/codigo', asinc(async (req: any, res: any) => {
+// La pantalla lo pide cada 15 s: 4 por minuto de uso normal. El tope sale del
+// local del token, para dejar margen a varias pantallas detras de la misma IP.
+publico.post('/codigo', limite(topePorToken('codigo')), asinc(async (req: any, res: any) => {
     const k = await kioskoPorToken(req.body.kiosko_token);
     if (!k) { return mal(res, 'Esta pantalla ya no esta autorizada. Vuelve a vincularla desde el POS.', 410); }
 
@@ -1053,7 +1166,8 @@ publico.post('/codigo', asinc(async (req: any, res: any) => {
  * tiene que pedirle la ubicacion al navegador: pedir permiso de GPS cuando la
  * sede no lo exige es molesto y entrena a la gente a decir que no.
  */
-publico.post('/marcar/info', asinc(async (req: any, res: any) => {
+// Se consulta una vez antes de cada marca.
+publico.post('/marcar/info', limite(topeDe('marcar_info')), asinc(async (req: any, res: any) => {
     const k: any = await prisma.asistencia_kiosko.findFirst({
         where: { idkiosko: Number(req.body.idkiosko), revocado_at: null }
     });
@@ -1078,6 +1192,94 @@ publico.post('/marcar/info', asinc(async (req: any, res: any) => {
  * politica: alguien la escribio a proposito.
  */
 interface Puerta { mensaje: string; habilitable: boolean }
+
+/**
+ * Quien es el dueno de este celular, y en que dia operativo esta.
+ *
+ * Misma resolucion que usa `/marcar`: el token del dispositivo identifica a la
+ * persona. Lo que NO se pide aqui es el codigo del kiosko, porque ese codigo
+ * prueba PRESENCIA -- necesaria para marcar, no para declarar un acuerdo que
+ * ya existe entre dos companeros.
+ */
+async function celularDe(req: any) {
+    const dispositivo = req.body?.dispositivo;
+    if (!dispositivo || typeof dispositivo !== 'string' || dispositivo.length !== 64) { return null; }
+
+    const disp: any = await prisma.colaborador_dispositivo.findFirst({
+        where: { token_hash: sha256(dispositivo), activo: true }
+    });
+    if (!disp) { return null; }
+    if (new Date(disp.expira_at).getTime() < Date.now()) { return null; }
+
+    const c: any = await prisma.colaborador.findUnique({ where: { idcolaborador: disp.idcolaborador } });
+    if (!c || c.estado !== 0) { return null; }
+
+    const sede: any = await prisma.sede.findUnique({ where: { idsede: c.idsede } });
+    if (!sede) { return null; }
+
+    const org: any = await prisma.org.findUnique({ where: { idorg: c.idorg } });
+    const corteRaw = org?.asis_hora_corte;
+    const corte = corteRaw instanceof Date
+        ? corteRaw.toISOString().slice(11, 19)
+        : String(corteRaw || '05:00:00');
+
+    return {
+        idcolaborador: c.idcolaborador,
+        idorg: c.idorg,
+        idsede: c.idsede,
+        idsede_restobar: sede.idsede_restobar,
+        fecha: diaOperativo(corte, ahoraLima())
+    };
+}
+
+/**
+ * A quienes puede decir que esta cubriendo.
+ *
+ * Solo aparecen los que hoy tenian que trabajar y no vinieron. Ofrecer la
+ * lista entera del local invitaria a poner cualquier nombre.
+ */
+publico.post('/cambio-turno/candidatos', limite(LIMITES_POR_DEFECTO.marcar_info), asinc(async (req: any, res: any) => {
+    const d = await celularDe(req);
+    if (!d) { return mal(res, 'Este celular no esta activado.', 403); }
+
+    ok(res, {
+        fecha: d.fecha,
+        candidatos: await cambioTurno.candidatos(
+            d.idorg, d.idsede, d.idsede_restobar, d.idcolaborador, d.fecha)
+    });
+}));
+
+/** Lo propone el que vino a cubrir. Queda pendiente hasta que el otro confirme. */
+publico.post('/cambio-turno/proponer', limite(LIMITES_POR_DEFECTO.marcar), asinc(async (req: any, res: any) => {
+    const d = await celularDe(req);
+    if (!d) { return mal(res, 'Este celular no esta activado.', 403); }
+
+    const aQuien = Number(req.body.idcolaborador_falta) || 0;
+    if (!aQuien) { return mal(res, 'Falta decir a quien estas cubriendo.'); }
+
+    ok(res, await cambioTurno.proponer(
+        d.idorg, d.idsede_restobar, d.idsede,
+        d.idcolaborador, aQuien, d.fecha,
+        Number(req.body.idmarca) || null));
+}));
+
+/** Lo que este celular tiene para confirmar, y su respuesta. */
+publico.post('/cambio-turno/pendientes', limite(LIMITES_POR_DEFECTO.marcar_info), asinc(async (req: any, res: any) => {
+    const d = await celularDe(req);
+    if (!d) { return mal(res, 'Este celular no esta activado.', 403); }
+
+    ok(res, { pendientes: await cambioTurno.pendientesDe(d.idcolaborador) });
+}));
+
+publico.post('/cambio-turno/resolver', limite(LIMITES_POR_DEFECTO.marcar), asinc(async (req: any, res: any) => {
+    const d = await celularDe(req);
+    if (!d) { return mal(res, 'Este celular no esta activado.', 403); }
+
+    const idcambio = Number(req.body.idcambio) || 0;
+    if (!idcambio) { return mal(res, 'Falta el cambio.'); }
+
+    ok(res, await cambioTurno.resolver(d.idcolaborador, idcambio, !!req.body.acepta));
+}));
 
 function puertaCerrada(dl: any, politica: string): Puerta | null {
     // `habilitable` dice si un administrador puede resolverlo ahi mismo, en el
@@ -1107,7 +1309,8 @@ function puertaCerrada(dl: any, politica: string): Puerta | null {
     return null;
 }
 
-publico.post('/marcar', asinc(async (req: any, res: any) => {
+// Marcar es algo que se hace dos veces al dia. 40 por minuto cubre un turno entero saliendo junto y nada mas.
+publico.post('/marcar', limite(topeDe('marcar')), asinc(async (req: any, res: any) => {
     const idkiosko = Number(req.body.idkiosko);
     const dispositivo = req.body.dispositivo;
 
@@ -1167,8 +1370,6 @@ publico.post('/marcar', asinc(async (req: any, res: any) => {
         orderBy: { marcada_at: 'asc' }
     });
 
-    const entrada = delDia.find((m: any) => m.tipo === 'ENTRADA');
-    const salida = delDia.find((m: any) => m.tipo === 'SALIDA');
     const nombre = ((c.nombres || '') + ' ' + (c.apellidos || '')).trim();
 
     // Doble escaneo o reintento del navegador: se muestra, no se inserta.
@@ -1181,14 +1382,30 @@ publico.post('/marcar', asinc(async (req: any, res: any) => {
         });
     }
 
-    if (entrada && salida) {
+    // CUANTAS MARCAS ENTRAN EN EL DIA
+    //
+    // Antes eran dos fijas -- una entrada y una salida -- y al llegar ahi el
+    // marcador decia "COMPLETO". Con turno partido eso cortaba a la persona a
+    // la mitad de su jornada: entraba al mediodia, salia, y a la noche el
+    // marcador le decia que ya habia terminado.
+    //
+    // El tope ahora sale del HORARIO: dos marcas por tramo. Quien tiene turno
+    // corrido sigue con dos, igual que siempre; quien tiene partido tiene
+    // cuatro. Al que no tiene horario cargado se le dan dos, que es lo minimo
+    // para que pueda trabajar mientras se lo configuran.
+    const tope = Math.max(2, tramosDe(c.horario_semanal as any, fecha).length * 2);
+
+    if (delDia.length >= tope) {
         return ok(res, {
             resultado: 'COMPLETO', nombres: nombre,
-            mensaje: 'Ya marcaste entrada y salida hoy. Si necesitas otra marca, pide al administrador.'
+            mensaje: 'Ya registraste todas tus marcas de hoy. Si necesitas otra, pide al administrador.'
         });
     }
 
-    const tipo = entrada ? 'SALIDA' : 'ENTRADA';
+    // Se alterna contra la ULTIMA marca, no contra "existe una entrada": con
+    // turno partido hay varias, y lo que decide si toca entrar o salir es la
+    // ultima que hizo.
+    const tipo = (ultima && ultima.tipo === 'ENTRADA') ? 'SALIDA' : 'ENTRADA';
 
     // --- Hoy se trabaja? -------------------------------------------------
     // Solo se pregunta en la ENTRADA. Al que ya entro jamas se le niega la
@@ -1241,7 +1458,8 @@ publico.post('/marcar', asinc(async (req: any, res: any) => {
 
     // La tardanza solo aplica a la ENTRADA, y se guarda como SNAPSHOT: si manana
     // le cambian el horario, la historia de hoy no se reescribe.
-    const esperada = tipo === 'ENTRADA' ? horaEsperada(c.horario_semanal as any, fecha) : null;
+    // Idem: con turno partido, contra la entrada mas cercana a la marca.
+    const esperada = tipo === 'ENTRADA' ? horaEsperada(c.horario_semanal as any, fecha, ahora) : null;
     const tardanza = tipo === 'ENTRADA' ? tardanzaMin(esperada, ahora, c.tolerancia_min ?? 10) : null;
 
     await prisma.asistencia_marca.create({
@@ -1270,8 +1488,12 @@ publico.post('/marcar', asinc(async (req: any, res: any) => {
         nombres: nombre,
         hora: ahora.slice(11, 16),
         tardanza_min: tardanza,
-        horas: tipo === 'SALIDA' && entrada
-            ? horasTurno(new Date(entrada.marcada_at).toISOString().slice(0, 19).replace('T', ' '), ahora)
+        // Las horas del TRAMO que se acaba de cerrar, no las del dia entero.
+        // `ultima` es la entrada que esta salida cierra (por eso el tipo salio
+        // SALIDA). Con turno corrido es la unica entrada y da lo mismo de
+        // siempre; con turno partido evita contar el hueco del mediodia.
+        horas: tipo === 'SALIDA' && ultima
+            ? horasTurno(new Date(ultima.marcada_at).toISOString().slice(0, 19).replace('T', ' '), ahora)
             : null,
         nota
     });

@@ -21,6 +21,9 @@ import { PrismaClient } from "@prisma/client";
 import { anotar, Autor } from "./asistencia.bitacora";
 import { Ctx, Invalido } from "./asistencia.config";
 import {
+    Regimen, REGIMENES, normalizarRegimen, normalizarRmv, interruptoresDe, beneficiosDe
+} from "./planilla.regimen";
+import {
     Frecuencia, normalizarFrecuencia, normalizarInicioSemana,
     periodoDe, ultimosPeriodos, periodoPorClave, Periodo
 } from "./planilla.periodos";
@@ -41,10 +44,18 @@ export const INTERRUPTORES = [
     { campo: 'usa_renta_quinta', clave: 'renta_quinta', titulo: 'Renta de quinta categoria',
       ayuda: 'Retencion de impuesto a la renta. Solo aplica por encima de 7 UIT al ano.' },
     { campo: 'usa_formato_legal', clave: 'formato_legal', titulo: 'Boleta con formato de ley',
-      ayuda: 'Imprime la boleta con los datos que exige la norma: RUC, regimen laboral, dias trabajados.' }
+      ayuda: 'Imprime la boleta con los datos que exige la norma: RUC, regimen laboral, dias trabajados.' },
+    { campo: 'usa_sobretiempo', clave: 'sobretiempo', titulo: 'Pagar horas extra',
+      ayuda: 'Agrega a la boleta el tiempo trabajado de mas: 25% las dos primeras horas del dia y 35% las siguientes (D.S. 007-2002-TR). Las horas extra se REGISTRAN siempre, este activado o no; esto decide si ademas se pagan.' }
 ] as const;
 
+/** Minutos de gracia por defecto antes de contar sobretiempo. */
+export const UMBRAL_SOBRETIEMPO_DEFECTO = 15;
+
 export interface ConfigPlanilla {
+    regimen_laboral: Regimen;
+    /** Remuneracion minima vigente. Cambia por decreto, por eso se guarda. */
+    rmv: number;
     frecuencia_pago: Frecuencia;
     semana_empieza: number;
     usa_pensiones: boolean;
@@ -53,10 +64,28 @@ export interface ConfigPlanilla {
     usa_gratificacion: boolean;
     usa_renta_quinta: boolean;
     usa_formato_legal: boolean;
+    usa_sobretiempo: boolean;
+    /** Minutos fuera de la jornada que NO cuentan como sobretiempo. */
+    sobretiempo_min_umbral: number;
+}
+
+/**
+ * El umbral, acotado a algo que tenga sentido.
+ *
+ * Un umbral enorme apagaria el sobretiempo sin que nadie se entere: la pantalla
+ * diria que esta activado y no pagaria nunca. Dos horas es el tope: mas que eso
+ * ya no es "margen para marcar", es media jornada regalada.
+ */
+export function normalizarUmbral(v: any): number {
+    const n = Number(v);
+    if (!Number.isFinite(n) || n < 0) { return UMBRAL_SOBRETIEMPO_DEFECTO; }
+    return Math.min(Math.round(n), 120);
 }
 
 export function configDe(org: any): ConfigPlanilla {
     return {
+        regimen_laboral: normalizarRegimen(org?.regimen_laboral),
+        rmv: normalizarRmv(org?.rmv),
         frecuencia_pago: normalizarFrecuencia(org?.frecuencia_pago),
         semana_empieza: normalizarInicioSemana(org?.semana_empieza),
         usa_pensiones: !!org?.usa_pensiones,
@@ -64,7 +93,9 @@ export function configDe(org: any): ConfigPlanilla {
         usa_cts: !!org?.usa_cts,
         usa_gratificacion: !!org?.usa_gratificacion,
         usa_renta_quinta: !!org?.usa_renta_quinta,
-        usa_formato_legal: !!org?.usa_formato_legal
+        usa_formato_legal: !!org?.usa_formato_legal,
+        usa_sobretiempo: !!org?.usa_sobretiempo,
+        sobretiempo_min_umbral: normalizarUmbral(org?.sobretiempo_min_umbral)
     };
 }
 
@@ -79,6 +110,10 @@ export async function leerConfig(ctx: Ctx) {
             ...i,
             activo: (cfg as any)[i.campo]
         })),
+        // La pantalla no tiene por que saberse la Ley MYPE: se le manda la
+        // lista de regimenes y que corresponde a cada uno.
+        regimenes: REGIMENES,
+        beneficios: beneficiosDe(cfg.regimen_laboral),
         // El periodo en curso y los anteriores, para que la pantalla no tenga
         // que reimplementar las cuentas de calendario.
         periodo_actual: periodoDe(hoy, cfg.frecuencia_pago, cfg.semana_empieza),
@@ -92,11 +127,24 @@ export async function guardarConfig(ctx: Ctx, body: any, autor: Autor) {
 
     const frecuencia = normalizarFrecuencia(body.frecuencia_pago ?? antes.frecuencia_pago);
     const semana = normalizarInicioSemana(body.semana_empieza ?? antes.semana_empieza);
+    const regimen = normalizarRegimen(body.regimen_laboral ?? antes.regimen_laboral);
 
-    const flag = (campo: string) =>
-        body[campo] === undefined ? (antes as any)[campo] : !!body[campo];
+    // Al CAMBIAR de regimen se acomodan los interruptores que ese regimen
+    // decide: encender CTS en una microempresa arma una boleta que la Ley MYPE
+    // no contempla. Solo al cambiar -- si el regimen no se toco, el empleador
+    // manda, porque puede pagar por encima del minimo de su regimen.
+    const cambioRegimen = regimen !== antes.regimen_laboral;
+    const porRegimen: Record<string, boolean> = cambioRegimen ? interruptoresDe(regimen) : {};
+
+    const flag = (campo: string) => {
+        if (body[campo] !== undefined) { return !!body[campo]; }
+        if (campo in porRegimen) { return porRegimen[campo]; }
+        return (antes as any)[campo];
+    };
 
     const nuevo: ConfigPlanilla = {
+        regimen_laboral: regimen,
+        rmv: body.rmv === undefined ? antes.rmv : normalizarRmv(body.rmv),
         frecuencia_pago: frecuencia,
         semana_empieza: semana,
         usa_pensiones: flag('usa_pensiones'),
@@ -104,7 +152,11 @@ export async function guardarConfig(ctx: Ctx, body: any, autor: Autor) {
         usa_cts: flag('usa_cts'),
         usa_gratificacion: flag('usa_gratificacion'),
         usa_renta_quinta: flag('usa_renta_quinta'),
-        usa_formato_legal: flag('usa_formato_legal')
+        usa_formato_legal: flag('usa_formato_legal'),
+        usa_sobretiempo: flag('usa_sobretiempo'),
+        sobretiempo_min_umbral: body.sobretiempo_min_umbral === undefined
+            ? antes.sobretiempo_min_umbral
+            : normalizarUmbral(body.sobretiempo_min_umbral)
     };
 
     await prisma.org.update({ where: { idorg: ctx.idorg }, data: nuevo as any });

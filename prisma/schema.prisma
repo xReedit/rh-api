@@ -53,6 +53,7 @@ model colaborador {
   @@index([idorg], map: "colaborador_FK_1")
   @@index([idusuario_restobar], map: "ix_colab_usrestobar")
   @@index([idarea], map: "ix_colab_area")
+  @@index([qr_invitacion], map: "ix_colab_qr_invitacion")
 }
 
 model colaborador_contrato {
@@ -98,27 +99,31 @@ model colaborador_contrato_detalle {
 }
 
 model org {
-  idorg                Int                    @id @default(autoincrement())
-  nombre               String                 @db.VarChar(150)
-  direccion            String                 @db.VarChar(150)
-  ruc                  String                 @db.Char(20)
-  telefono             String                 @db.VarChar(50)
-  idorg_restobar       Int
-  estado               String                 @default("0") @db.Char(1)
-  asis_hora_corte      DateTime               @default(dbgenerated("'05:00:00'")) @db.Time(0)
-  frecuencia_pago      org_frecuencia_pago    @default(MENSUAL)
-  semana_empieza       Int                    @default(1) @db.TinyInt
-  usa_pensiones        Boolean                @default(false)
-  usa_essalud          Boolean                @default(false)
-  usa_cts              Boolean                @default(false)
-  usa_gratificacion    Boolean                @default(false)
-  usa_renta_quinta     Boolean                @default(false)
-  usa_formato_legal    Boolean                @default(false)
-  colaborador          colaborador[]
-  colaborador_boleta   colaborador_boleta[]
-  colaborador_contrato colaborador_contrato[]
-  planilla_periodo     planilla_periodo[]
-  sede                 sede[]
+  idorg                  Int                    @id @default(autoincrement())
+  nombre                 String                 @db.VarChar(150)
+  direccion              String                 @db.VarChar(150)
+  ruc                    String                 @db.Char(20)
+  telefono               String                 @db.VarChar(50)
+  idorg_restobar         Int
+  estado                 String                 @default("0") @db.Char(1)
+  asis_hora_corte        DateTime               @default(dbgenerated("'05:00:00'")) @db.Time(0)
+  frecuencia_pago        org_frecuencia_pago    @default(MENSUAL)
+  semana_empieza         Int                    @default(1) @db.TinyInt
+  usa_pensiones          Boolean                @default(false)
+  usa_essalud            Boolean                @default(false)
+  usa_cts                Boolean                @default(false)
+  usa_gratificacion      Boolean                @default(false)
+  usa_renta_quinta       Boolean                @default(false)
+  usa_formato_legal      Boolean                @default(false)
+  usa_sobretiempo        Boolean                @default(false)
+  sobretiempo_min_umbral Int                    @default(15) @db.SmallInt
+  regimen_laboral        org_regimen_laboral    @default(GENERAL)
+  rmv                    Decimal                @default(1130.00) @db.Decimal(10, 2)
+  colaborador            colaborador[]
+  colaborador_boleta     colaborador_boleta[]
+  colaborador_contrato   colaborador_contrato[]
+  planilla_periodo       planilla_periodo[]
+  sede                   sede[]
 }
 
 model rrhh_rol {
@@ -151,6 +156,7 @@ model sede {
   descanso_trabajado           sede_descanso_trabajado        @default(PERMISO)
   descanso_recargo_pct         Int                            @default(100) @db.SmallInt
   asis_configurado             Boolean                        @default(false)
+  marcador_personas            Int?                           @db.SmallInt
   colaborador                  colaborador[]
   colaborador_contrato_detalle colaborador_contrato_detalle[]
   org                          org                            @relation(fields: [idorg], references: [idorg], onUpdate: Restrict, map: "sede_FK")
@@ -168,6 +174,7 @@ model usuario {
   pass               String             @db.Char(20)
   idorg              Int
   estado             String             @default("0") @db.Char(1)
+  alcance            usuario_alcance    @default(SEDE)
   planilla_periodo   planilla_periodo[]
 }
 
@@ -295,9 +302,9 @@ model asistencia_marca {
   gps_lng                   Decimal?                @db.Decimal(11, 8)
   gps_distancia_m           Int?
 
-  @@unique([idcolaborador, fecha_local, tipo], map: "ux_marca_dia")
   @@index([idorg, fecha_local], map: "ix_reporte")
   @@index([idsede_restobar, fecha_local], map: "ix_sede_dia")
+  @@index([idcolaborador, fecha_local, tipo], map: "ix_marca_dia")
 }
 
 model colaborador_dispositivo {
@@ -367,6 +374,33 @@ model asistencia_bitacora {
   @@index([idcolaborador, creado_at], map: "ix_bit_colaborador")
   @@index([entidad, identidad], map: "ix_bit_entidad")
   @@index([idorg, creado_at], map: "ix_bit_org_fecha")
+}
+
+model usuario_sede {
+  idusuario_sede Int       @id @default(autoincrement())
+  idusuario      Int
+  idsede         Int
+  creado_at      DateTime? @db.DateTime(0)
+
+  @@unique([idusuario, idsede], map: "ux_usuario_sede")
+  @@index([idsede], map: "ix_us_sede")
+}
+
+model asistencia_cambio_turno {
+  idcambio            Int                            @id @default(autoincrement())
+  idorg               Int
+  idsede_restobar     Int
+  fecha               DateTime                       @db.Date
+  idcolaborador_cubre Int
+  idcolaborador_falta Int
+  estado              asistencia_cambio_turno_estado @default(PENDIENTE)
+  idmarca_origen      Int?
+  creado_at           DateTime                       @db.DateTime(0)
+  resuelto_at         DateTime?                      @db.DateTime(0)
+
+  @@unique([idcolaborador_cubre, fecha], map: "ux_cambio_dia")
+  @@index([idcolaborador_falta, estado], map: "ix_cambio_falta")
+  @@index([idorg, idsede_restobar, fecha], map: "ix_cambio_sede")
 }
 
 enum asistencia_marca_tipo {
@@ -441,4 +475,23 @@ enum planilla_periodo_tipo {
   QUINCENAL
   SEMANAL
   DIARIO
+}
+
+enum usuario_alcance {
+  SEDE
+  ASIGNADAS
+  EMPRESA
+}
+
+enum org_regimen_laboral {
+  GENERAL
+  PEQUENA
+  MICRO
+}
+
+enum asistencia_cambio_turno_estado {
+  PENDIENTE
+  CONFIRMADO
+  RECHAZADO
+  VENCIDO
 }

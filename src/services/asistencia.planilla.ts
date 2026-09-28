@@ -21,22 +21,28 @@
 
 import { PrismaClient } from "@prisma/client";
 import {
-    ahoraLima, fechaSql, aTextoLima, diaOperativo, horaEsperada, horasTurno
+    ahoraLima, fechaSql, aTextoLima, diaOperativo, horaEsperada, horasTurno, indexarMarcas, SIN_MARCAS,
+    horasJornada
 } from "./asistencia.calendario";
 import { resolverDia, CATEGORIAS_PAGADAS } from "./asistencia.dialaboral";
 import { contextoLaboral, Ctx, Invalido } from "./asistencia.config";
 import { anotar, Autor } from "./asistencia.bitacora";
-import { resolverPeriodoDeOrg } from "./planilla.config";
+import { resolverPeriodoDeOrg, configDe } from "./planilla.config";
+import { debajoDelMinimo } from "./planilla.regimen";
+import {
+    minutosTrabajados, sobretiempoDelDia, sumarSobretiempo, minutosATexto, Sobretiempo
+} from "./asistencia.sobretiempo";
 import { Periodo as PeriodoPago } from "./planilla.periodos";
 
 const prisma = new PrismaClient();
 
-/** Los cuatro conceptos, por su codigo estable (migracion 055). */
+/** Los conceptos que este modulo pone en la boleta, por su codigo estable. */
 export const CODIGOS = {
     RECARGO_DESCANSO: 'ASIS_RECARGO_DESCANSO',
     RECARGO_FERIADO: 'ASIS_RECARGO_FERIADO',
     DESC_TARDANZA: 'ASIS_DESC_TARDANZA',
-    DESC_FALTAS: 'ASIS_DESC_FALTAS'
+    DESC_FALTAS: 'ASIS_DESC_FALTAS',
+    SOBRETIEMPO: 'ASIS_SOBRETIEMPO'
 } as const;
 
 /**
@@ -47,6 +53,17 @@ export const CODIGOS = {
  * distinto por dia en febrero que en marzo.
  */
 const DIAS_MES = 30;
+
+/**
+ * Dias que se pagan en cada tipo de periodo.
+ *
+ * Misma convencion que `DIAS_MES`: un mes son 30 dias tenga 28 o 31. Se usa
+ * para topear los descuentos, que se cuentan por calendario y en un mes de 31
+ * dias se pasarian del sueldo.
+ */
+const DIAS_PAGABLES: Record<string, number> = {
+    DIARIO: 1, SEMANAL: 7, QUINCENAL: 15, MENSUAL: DIAS_MES
+};
 
 /** Tope de dias por calculo. Un periodo de planilla nunca pasa de un mes largo. */
 const RANGO_MAX_DIAS = 45;
@@ -87,7 +104,7 @@ function diasEntre(desde: string, hasta: string): string[] {
  * Sin contrato activo no hay con que calcular, y eso se informa en vez de
  * asumir un sueldo.
  */
-async function contratoDe(idcolaborador: number) {
+export async function contratoDe(idcolaborador: number) {
     const filas: any[] = await prisma.$queryRawUnsafe(
         `SELECT ccd.importe, ccd.unidad_remuneracion, ccd.horas
            FROM colaborador_contrato cc
@@ -161,6 +178,19 @@ export interface FilaPlanilla {
     /** Permisos sin goce: no vino y no se le paga. Se descuentan como una falta. */
     dias_sin_goce: number;
     tardanza_min: number;
+    /** Minutos trabajados de mas en el periodo. Se informan aunque no se paguen:
+     *  registrarlos es obligatorio (D.S. 004-2006-TR, art. 1). */
+    sobretiempo_min: number;
+    /** Lo que se paga por esas horas. 0 si el local no activo el pago. */
+    sobretiempo_importe: number;
+    sobretiempo_se_paga: boolean;
+    /**
+     * El minimo que le corresponderia, si su sueldo quedo por debajo. null si
+     * esta bien. Se avisa y no se bloquea: puede ser un error de carga o una
+     * situacion que el sistema no conoce, y frenar la planilla entera por una
+     * duda seria peor que mostrarla con la advertencia.
+     */
+    sueldo_bajo_minimo: number | null;
     descansos_trabajados: number;
     feriados_trabajados: number;
     conceptos: LineaConcepto[];
@@ -190,6 +220,8 @@ async function catalogo() {
  */
 export async function calcular(ctx: Ctx, body: any): Promise<any> {
     const periodo = await resolverPeriodoDeOrg(ctx, body);
+    // Hace falta para el sobretiempo: si se paga, y cuantos minutos de gracia.
+    const cfg = configDe(await prisma.org.findUnique({ where: { idorg: ctx.idorg } }));
     const dias = diasEntre(periodo.desde, periodo.hasta);
     if (dias.length > RANGO_MAX_DIAS) {
         throw new Invalido(`El periodo no puede pasar de ${RANGO_MAX_DIAS} dias.`);
@@ -223,13 +255,7 @@ export async function calcular(ctx: Ctx, body: any): Promise<any> {
 
     // Indice por persona + dia: recorrer todas las marcas por celda seria
     // cuadratico y este calculo corre sobre un mes entero.
-    const idx = new Map<string, any>();
-    for (const m of marcas) {
-        const dia = aTextoLima(m.fecha_local)!.slice(0, 10);
-        const k = `${m.idcolaborador}|${dia}`;
-        if (!idx.has(k)) { idx.set(k, {}); }
-        idx.get(k)[m.tipo] = m;
-    }
+    const idx = indexarMarcas(marcas, m => aTextoLima(m.fecha_local)!.slice(0, 10));
 
     const filas: FilaPlanilla[] = [];
 
@@ -239,6 +265,9 @@ export async function calcular(ctx: Ctx, body: any): Promise<any> {
 
         let faltas = 0, tardanzaMin = 0, trabajados = 0;
         let pagadosSinTrabajar = 0, sinGoce = 0;
+        // El sobretiempo se calcula DIA POR DIA y recien despues se suma: el
+        // tramo del 25% son las dos primeras horas de cada dia, no del mes.
+        const extrasDelPeriodo: Sobretiempo[] = [];
         const descansos: string[] = [];
         const feriados: Array<{ fecha: string; pct: number }> = [];
 
@@ -253,13 +282,27 @@ export async function calcular(ctx: Ctx, body: any): Promise<any> {
                 politica: c.politica
             });
 
-            const par = idx.get(`${p.idcolaborador}|${fecha}`) || {};
+            const par = idx.get(`${p.idcolaborador}|${fecha}`) || SIN_MARCAS;
             const entrada = par.ENTRADA || null;
             const cerrado = fecha < hoyOperativo;
 
             if (entrada) {
                 trabajados++;
-                if ((entrada.tardanza_min || 0) > 0) { tardanzaMin += entrada.tardanza_min; }
+                // La del dia entero: con turno partido son dos entradas y las dos cuentan.
+                tardanzaMin += par.tardanza_min;
+
+                // Horas extra del dia. Se calculan SIEMPRE, este activado o no
+                // el pago: registrarlas es obligatorio (D.S. 004-2006-TR, art.
+                // 1, modificado por el 011-2006-TR, que exige anotar las horas
+                // y minutos de permanencia fuera de la jornada).
+                if (tarifa) {
+                    extrasDelPeriodo.push(sobretiempoDelDia(
+                        minutosTrabajados(par.todas),
+                        Math.round(horasJornada(p.horario_semanal as any, fecha) * 60),
+                        cfg.sobretiempo_min_umbral,
+                        tarifa.valor_minuto
+                    ));
+                }
 
                 // El recargo se paga por trabajar, no por estar programado: se
                 // cuenta con la marca en la mano, no con la excepcion cargada.
@@ -280,6 +323,7 @@ export async function calcular(ctx: Ctx, body: any): Promise<any> {
         }
 
         const lineas: LineaConcepto[] = [];
+        const extras = sumarSobretiempo(extrasDelPeriodo);
 
         if (tarifa) {
             const recDescanso = descansos.reduce((a, f) => {
@@ -297,6 +341,18 @@ export async function calcular(ctx: Ctx, body: any): Promise<any> {
                     `${feriados.length} feriado(s) trabajados: ${feriados.map(f => f.fecha).join(', ')}`));
             }
 
+            // Pagar es OTRA decision que registrar. El sobretiempo requiere
+            // acuerdo; el D.S. 011-2006-TR lo presume por quedarse fuera del
+            // horario, pero admite prueba en contrario. En un restaurante la
+            // gente llega antes y se queda despues: pagar cada minuto de
+            // permanencia automaticamente seria caro y, sobre todo, falso.
+            if (cfg.usa_sobretiempo && extras.importe > 0) {
+                lineas.push(linea(conceptos, CODIGOS.SOBRETIEMPO, extras.importe,
+                    `${minutosATexto(extras.minutos)} de sobretiempo: ` +
+                    `${minutosATexto(extras.min_25)} al 25%` +
+                    (extras.min_35 ? ` y ${minutosATexto(extras.min_35)} al 35%` : '')));
+            }
+
             const descTardanza = tardanzaMin * tarifa.valor_minuto;
             if (descTardanza > 0) {
                 lineas.push(linea(conceptos, CODIGOS.DESC_TARDANZA, descTardanza,
@@ -307,13 +363,34 @@ export async function calcular(ctx: Ctx, body: any): Promise<any> {
             // dia no trabajado y no pagado -- pero se nombran distinto en el
             // detalle para que nadie tenga que adivinar de donde salio el monto.
             const noPagados = faltas + sinGoce;
-            const descFaltas = noPagados * tarifa.valor_dia;
+
+            // NO SE PUEDE DESCONTAR MAS DE LO QUE SE DEBE.
+            //
+            // El mes son 30 dias por convencion legal -- de ahi sale el valor
+            // del dia -- pero las faltas se cuentan por calendario. En un mes
+            // de 31, alguien ausente todo el mes daba 31 x 100 = 3100 sobre un
+            // sueldo de 3000, y la boleta salia en -100. El caso no es raro:
+            // es exactamente el de quien dejo de venir, que es para lo que
+            // existe el modulo de ausencias.
+            //
+            // El tope es lo que queda del sueldo despues de la tardanza. Un
+            // descuento que deja la boleta en negativo no es un descuento: es
+            // cobrarle al trabajador por no haber ido.
+            const sueldoPeriodo = tarifa.valor_dia * DIAS_PAGABLES[periodo.tipo];
+            const tope = Math.max(0, sueldoPeriodo - descTardanza);
+            const descFaltas = Math.min(noPagados * tarifa.valor_dia, tope);
+
             if (descFaltas > 0) {
                 const partes = [];
                 if (faltas) { partes.push(`${faltas} falta(s)`); }
                 if (sinGoce) { partes.push(`${sinGoce} dia(s) de permiso sin goce`); }
+
+                // Si el tope mordio, se dice: un importe que no es
+                // dias x valor_dia tiene que poder explicarse solo.
+                const topeado = descFaltas < noPagados * tarifa.valor_dia;
                 lineas.push(linea(conceptos, CODIGOS.DESC_FALTAS, descFaltas,
-                    `${partes.join(' y ')} a ${tarifa.valor_dia} por dia`));
+                    `${partes.join(' y ')} a ${tarifa.valor_dia} por dia` +
+                    (topeado ? ' (tope: no puede superar el sueldo del periodo)' : '')));
             }
         }
 
@@ -332,6 +409,17 @@ export async function calcular(ctx: Ctx, body: any): Promise<any> {
             dias_pagados_sin_trabajar: pagadosSinTrabajar,
             dias_sin_goce: sinGoce,
             tardanza_min: tardanzaMin,
+            // Va en la fila aunque no se pague: es lo que exige registrar la
+            // norma, y es el dato con el que el local decide si activarlo.
+            sobretiempo_min: extras.minutos,
+            sobretiempo_importe: cfg.usa_sobretiempo ? extras.importe : 0,
+            sobretiempo_se_paga: cfg.usa_sobretiempo,
+            // Se compara contra el minimo PROPORCIONAL a su jornada: media
+            // jornada tiene medio minimo, y avisar con el tope entero seria
+            // marcar como ilegal a todo el personal part-time.
+            sueldo_bajo_minimo: tarifa
+                ? debajoDelMinimo(tarifa.valor_dia * 30, tarifa.horas_dia, cfg.rmv)
+                : null,
             descansos_trabajados: descansos.length,
             feriados_trabajados: feriados.length,
             conceptos: lineas,
@@ -397,14 +485,16 @@ export async function aplicar(ctx: Ctx, body: any, autor: Autor) {
     const deLaSede = calculo.filas.map((f: any) => f.idcolaborador);
     if (!deLaSede.length) { return { ...calculo, aplicados: 0 }; }
 
-    const borradas = await prisma.colaborador_boleta.deleteMany({
-        where: {
-            idorg: ctx.idorg,
-            idcolaborador: { in: deLaSede },
-            idvariables: { in: ids },
-            periodo
-        } as any
-    });
+    const donde = {
+        idorg: ctx.idorg,
+        idcolaborador: { in: deLaSede },
+        idvariables: { in: ids },
+        periodo
+    } as any;
+
+    // Cuantas habia antes, solo para informarlo. El conteo va fuera de la
+    // transaccion a proposito: es un dato para la pantalla, no una condicion.
+    const borradas = await prisma.colaborador_boleta.count({ where: donde });
 
     const ahora = ahoraLima();
     const nuevas: any[] = [];
@@ -427,9 +517,18 @@ export async function aplicar(ctx: Ctx, body: any, autor: Autor) {
         }
     }
 
-    if (nuevas.length) {
-        await prisma.colaborador_boleta.createMany({ data: nuevas as any });
-    }
+    // Borrar e insertar van JUNTOS o no van.
+    //
+    // Sueltos, una caida entre las dos operaciones deja la boleta sin los
+    // conceptos viejos y sin los nuevos: el trabajador cobra de menos y no
+    // queda rastro de por que. Es la unica parte del modulo donde una
+    // interrupcion a destiempo se traduce directo en plata.
+    await prisma.$transaction([
+        prisma.colaborador_boleta.deleteMany({ where: donde }),
+        ...(nuevas.length
+            ? [prisma.colaborador_boleta.createMany({ data: nuevas as any })]
+            : [])
+    ]);
 
     const sede: any = await prisma.sede.findUnique({ where: { idsede: ctx.idsede } });
 
@@ -440,9 +539,9 @@ export async function aplicar(ctx: Ctx, body: any, autor: Autor) {
         detalle: `Conceptos de asistencia del periodo ${calculo.periodo} (${calculo.clave}): ` +
             `${nuevas.length} linea(s) en ${calculo.filas.filter((f: any) => f.conceptos.length).length} boleta(s), ` +
             `+${calculo.totales.ingresos} / -${calculo.totales.descuentos}`,
-        anterior: { lineas_previas: borradas.count },
+        anterior: { lineas_previas: borradas },
         nuevo: { lineas: nuevas.length, ingresos: calculo.totales.ingresos, descuentos: calculo.totales.descuentos }
     }, autor);
 
-    return { ...calculo, aplicados: nuevas.length, reemplazados: borradas.count };
+    return { ...calculo, aplicados: nuevas.length, reemplazados: borradas };
 }

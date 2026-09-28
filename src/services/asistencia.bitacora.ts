@@ -84,18 +84,33 @@ const DIAS_TXT: any = { lun: 'Lun', mar: 'Mar', mie: 'Mie', jue: 'Jue', vie: 'Vi
 export function horarioATexto(h: HorarioSemanal | null | undefined): string {
     if (!h || !Object.keys(h).length) { return 'sin horario'; }
 
+    /**
+     * Los tramos de un dia en texto: "11:00-15:00 y 18:00-23:00".
+     *
+     * Acepta las dos formas guardadas (un tramo suelto o una lista) porque la
+     * bitacora muestra tambien lo que se guardo hace meses.
+     */
+    const texto = (t: any): string => {
+        if (!t) { return ''; }
+        const lista = Array.isArray(t) ? t : [t];
+        return lista.filter((x: any) => x && x.e && x.s)
+                    .map((x: any) => `${x.e}-${x.s}`)
+                    .join(' y ');
+    };
+
     const partes: string[] = [];
     let i = 0;
     while (i < DIAS.length) {
-        const d = DIAS[i], t = h[d];
-        if (!t) { i++; continue; }
+        const d = DIAS[i];
+        const txt = texto(h[d]);
+        if (!txt) { i++; continue; }
+
+        // Se comparan los tramos YA EN TEXTO: dos dias se agrupan solo si su
+        // jornada entera coincide, tramo por tramo y en el mismo orden.
         let j = i;
-        while (j + 1 < DIAS.length) {
-            const sig = h[DIAS[j + 1]];
-            if (!sig || sig.e !== t.e || sig.s !== t.s) { break; }
-            j++;
-        }
-        partes.push((j > i ? `${DIAS_TXT[d]}-${DIAS_TXT[DIAS[j]]}` : DIAS_TXT[d]) + ` ${t.e}-${t.s}`);
+        while (j + 1 < DIAS.length && texto(h[DIAS[j + 1]]) === txt) { j++; }
+
+        partes.push((j > i ? `${DIAS_TXT[d]}-${DIAS_TXT[DIAS[j]]}` : DIAS_TXT[d]) + ` ${txt}`);
         i = j + 1;
     }
     return partes.join(' · ') || 'sin horario';

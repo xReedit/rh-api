@@ -66,21 +66,33 @@ var __generator = (this && this.__generator) || function (thisArg, body) {
         if (op[0] & 5) throw op[1]; return { value: op[0] ? op[1] : void 0, done: true };
     }
 };
+var __spreadArray = (this && this.__spreadArray) || function (to, from, pack) {
+    if (pack || arguments.length === 2) for (var i = 0, l = from.length, ar; i < l; i++) {
+        if (ar || !(i in from)) {
+            if (!ar) ar = Array.prototype.slice.call(from, 0, i);
+            ar[i] = from[i];
+        }
+    }
+    return to.concat(ar || Array.prototype.slice.call(from));
+};
 exports.__esModule = true;
-exports.aplicar = exports.calcular = exports.tarifaDe = exports.CODIGOS = void 0;
+exports.aplicar = exports.calcular = exports.tarifaDe = exports.contratoDe = exports.CODIGOS = void 0;
 var client_1 = require("@prisma/client");
 var asistencia_calendario_1 = require("./asistencia.calendario");
 var asistencia_dialaboral_1 = require("./asistencia.dialaboral");
 var asistencia_config_1 = require("./asistencia.config");
 var asistencia_bitacora_1 = require("./asistencia.bitacora");
 var planilla_config_1 = require("./planilla.config");
+var planilla_regimen_1 = require("./planilla.regimen");
+var asistencia_sobretiempo_1 = require("./asistencia.sobretiempo");
 var prisma = new client_1.PrismaClient();
-/** Los cuatro conceptos, por su codigo estable (migracion 055). */
+/** Los conceptos que este modulo pone en la boleta, por su codigo estable. */
 exports.CODIGOS = {
     RECARGO_DESCANSO: 'ASIS_RECARGO_DESCANSO',
     RECARGO_FERIADO: 'ASIS_RECARGO_FERIADO',
     DESC_TARDANZA: 'ASIS_DESC_TARDANZA',
-    DESC_FALTAS: 'ASIS_DESC_FALTAS'
+    DESC_FALTAS: 'ASIS_DESC_FALTAS',
+    SOBRETIEMPO: 'ASIS_SOBRETIEMPO'
 };
 /**
  * Dias que se le paga a un mes.
@@ -90,6 +102,16 @@ exports.CODIGOS = {
  * distinto por dia en febrero que en marzo.
  */
 var DIAS_MES = 30;
+/**
+ * Dias que se pagan en cada tipo de periodo.
+ *
+ * Misma convencion que `DIAS_MES`: un mes son 30 dias tenga 28 o 31. Se usa
+ * para topear los descuentos, que se cuentan por calendario y en un mes de 31
+ * dias se pasarian del sueldo.
+ */
+var DIAS_PAGABLES = {
+    DIARIO: 1, SEMANAL: 7, QUINCENAL: 15, MENSUAL: DIAS_MES
+};
 /** Tope de dias por calculo. Un periodo de planilla nunca pasa de un mes largo. */
 var RANGO_MAX_DIAS = 45;
 var dosDec = function (n) { return Math.round(n * 100) / 100; };
@@ -136,6 +158,7 @@ function contratoDe(idcolaborador) {
         });
     });
 }
+exports.contratoDe = contratoDe;
 /**
  * Cuanto vale un dia y un minuto de esta persona.
  *
@@ -198,24 +221,28 @@ function catalogo() {
 function calcular(ctx, body) {
     var _a;
     return __awaiter(this, void 0, void 0, function () {
-        var periodo, dias, conceptos, c, org, corteRaw, corte, hoyOperativo, personal, marcas, idx, _i, marcas_1, m, dia, k, filas, _loop_1, _b, _c, p;
+        var periodo, cfg, _b, dias, conceptos, c, org, corteRaw, corte, hoyOperativo, personal, marcas, idx, filas, _loop_1, _i, _c, p;
         return __generator(this, function (_d) {
             switch (_d.label) {
                 case 0: return [4 /*yield*/, (0, planilla_config_1.resolverPeriodoDeOrg)(ctx, body)];
                 case 1:
                     periodo = _d.sent();
+                    _b = planilla_config_1.configDe;
+                    return [4 /*yield*/, prisma.org.findUnique({ where: { idorg: ctx.idorg } })];
+                case 2:
+                    cfg = _b.apply(void 0, [_d.sent()]);
                     dias = diasEntre(periodo.desde, periodo.hasta);
                     if (dias.length > RANGO_MAX_DIAS) {
                         throw new asistencia_config_1.Invalido("El periodo no puede pasar de ".concat(RANGO_MAX_DIAS, " dias."));
                     }
                     return [4 /*yield*/, catalogo()];
-                case 2:
+                case 3:
                     conceptos = _d.sent();
                     return [4 /*yield*/, (0, asistencia_config_1.contextoLaboral)(ctx.idorg, ctx.idsede, periodo.desde, periodo.hasta)];
-                case 3:
+                case 4:
                     c = _d.sent();
                     return [4 /*yield*/, prisma.org.findUnique({ where: { idorg: ctx.idorg } })];
-                case 4:
+                case 5:
                     org = _d.sent();
                     corteRaw = org === null || org === void 0 ? void 0 : org.asis_hora_corte;
                     corte = corteRaw instanceof Date ? corteRaw.toISOString().slice(11, 19) : String(corteRaw || '05:00:00');
@@ -224,7 +251,7 @@ function calcular(ctx, body) {
                             where: { idorg: ctx.idorg, idsede: ctx.idsede, estado: 0 },
                             orderBy: { nombres: 'asc' }
                         })];
-                case 5:
+                case 6:
                     personal = _d.sent();
                     return [4 /*yield*/, prisma.asistencia_marca.findMany({
                             where: {
@@ -235,21 +262,12 @@ function calcular(ctx, body) {
                                 }
                             }
                         })];
-                case 6:
+                case 7:
                     marcas = _d.sent();
-                    idx = new Map();
-                    for (_i = 0, marcas_1 = marcas; _i < marcas_1.length; _i++) {
-                        m = marcas_1[_i];
-                        dia = (0, asistencia_calendario_1.aTextoLima)(m.fecha_local).slice(0, 10);
-                        k = "".concat(m.idcolaborador, "|").concat(dia);
-                        if (!idx.has(k)) {
-                            idx.set(k, {});
-                        }
-                        idx.get(k)[m.tipo] = m;
-                    }
+                    idx = (0, asistencia_calendario_1.indexarMarcas)(marcas, function (m) { return (0, asistencia_calendario_1.aTextoLima)(m.fecha_local).slice(0, 10); });
                     filas = [];
                     _loop_1 = function (p) {
-                        var contrato, tarifa, faltas, tardanzaMin, trabajados, pagadosSinTrabajar, sinGoce, descansos, feriados, _e, dias_1, fecha, dl, par, entrada, cerrado, lineas, recDescanso, recFeriado, descTardanza, noPagados, descFaltas, partes;
+                        var contrato, tarifa, faltas, tardanzaMin, trabajados, pagadosSinTrabajar, sinGoce, extrasDelPeriodo, descansos, feriados, _e, dias_1, fecha, dl, par, entrada, cerrado, lineas, extras, recDescanso, recFeriado, descTardanza, noPagados, sueldoPeriodo, tope, descFaltas, partes, topeado;
                         return __generator(this, function (_f) {
                             switch (_f.label) {
                                 case 0: return [4 /*yield*/, contratoDe(p.idcolaborador)];
@@ -258,6 +276,7 @@ function calcular(ctx, body) {
                                     tarifa = tarifaDe(contrato);
                                     faltas = 0, tardanzaMin = 0, trabajados = 0;
                                     pagadosSinTrabajar = 0, sinGoce = 0;
+                                    extrasDelPeriodo = [];
                                     descansos = [];
                                     feriados = [];
                                     for (_e = 0, dias_1 = dias; _e < dias_1.length; _e++) {
@@ -271,13 +290,19 @@ function calcular(ctx, body) {
                                             dias_cierre: c.dias_cierre,
                                             politica: c.politica
                                         });
-                                        par = idx.get("".concat(p.idcolaborador, "|").concat(fecha)) || {};
+                                        par = idx.get("".concat(p.idcolaborador, "|").concat(fecha)) || asistencia_calendario_1.SIN_MARCAS;
                                         entrada = par.ENTRADA || null;
                                         cerrado = fecha < hoyOperativo;
                                         if (entrada) {
                                             trabajados++;
-                                            if ((entrada.tardanza_min || 0) > 0) {
-                                                tardanzaMin += entrada.tardanza_min;
+                                            // La del dia entero: con turno partido son dos entradas y las dos cuentan.
+                                            tardanzaMin += par.tardanza_min;
+                                            // Horas extra del dia. Se calculan SIEMPRE, este activado o no
+                                            // el pago: registrarlas es obligatorio (D.S. 004-2006-TR, art.
+                                            // 1, modificado por el 011-2006-TR, que exige anotar las horas
+                                            // y minutos de permanencia fuera de la jornada).
+                                            if (tarifa) {
+                                                extrasDelPeriodo.push((0, asistencia_sobretiempo_1.sobretiempoDelDia)((0, asistencia_sobretiempo_1.minutosTrabajados)(par.todas), Math.round((0, asistencia_calendario_1.horasJornada)(p.horario_semanal, fecha) * 60), cfg.sobretiempo_min_umbral, tarifa.valor_minuto));
                                             }
                                             // El recargo se paga por trabajar, no por estar programado: se
                                             // cuenta con la marca en la mano, no con la excepcion cargada.
@@ -304,6 +329,7 @@ function calcular(ctx, body) {
                                         }
                                     }
                                     lineas = [];
+                                    extras = (0, asistencia_sobretiempo_1.sumarSobretiempo)(extrasDelPeriodo);
                                     if (tarifa) {
                                         recDescanso = descansos.reduce(function (a, f) {
                                             var _a;
@@ -317,12 +343,24 @@ function calcular(ctx, body) {
                                         if (recFeriado > 0) {
                                             lineas.push(linea(conceptos, exports.CODIGOS.RECARGO_FERIADO, recFeriado, "".concat(feriados.length, " feriado(s) trabajados: ").concat(feriados.map(function (f) { return f.fecha; }).join(', '))));
                                         }
+                                        // Pagar es OTRA decision que registrar. El sobretiempo requiere
+                                        // acuerdo; el D.S. 011-2006-TR lo presume por quedarse fuera del
+                                        // horario, pero admite prueba en contrario. En un restaurante la
+                                        // gente llega antes y se queda despues: pagar cada minuto de
+                                        // permanencia automaticamente seria caro y, sobre todo, falso.
+                                        if (cfg.usa_sobretiempo && extras.importe > 0) {
+                                            lineas.push(linea(conceptos, exports.CODIGOS.SOBRETIEMPO, extras.importe, "".concat((0, asistencia_sobretiempo_1.minutosATexto)(extras.minutos), " de sobretiempo: ") +
+                                                "".concat((0, asistencia_sobretiempo_1.minutosATexto)(extras.min_25), " al 25%") +
+                                                (extras.min_35 ? " y ".concat((0, asistencia_sobretiempo_1.minutosATexto)(extras.min_35), " al 35%") : '')));
+                                        }
                                         descTardanza = tardanzaMin * tarifa.valor_minuto;
                                         if (descTardanza > 0) {
                                             lineas.push(linea(conceptos, exports.CODIGOS.DESC_TARDANZA, descTardanza, "".concat(tardanzaMin, " min de tardanza a ").concat(dosDec(tarifa.valor_minuto * 60), " por hora")));
                                         }
                                         noPagados = faltas + sinGoce;
-                                        descFaltas = noPagados * tarifa.valor_dia;
+                                        sueldoPeriodo = tarifa.valor_dia * DIAS_PAGABLES[periodo.tipo];
+                                        tope = Math.max(0, sueldoPeriodo - descTardanza);
+                                        descFaltas = Math.min(noPagados * tarifa.valor_dia, tope);
                                         if (descFaltas > 0) {
                                             partes = [];
                                             if (faltas) {
@@ -331,7 +369,9 @@ function calcular(ctx, body) {
                                             if (sinGoce) {
                                                 partes.push("".concat(sinGoce, " dia(s) de permiso sin goce"));
                                             }
-                                            lineas.push(linea(conceptos, exports.CODIGOS.DESC_FALTAS, descFaltas, "".concat(partes.join(' y '), " a ").concat(tarifa.valor_dia, " por dia")));
+                                            topeado = descFaltas < noPagados * tarifa.valor_dia;
+                                            lineas.push(linea(conceptos, exports.CODIGOS.DESC_FALTAS, descFaltas, "".concat(partes.join(' y '), " a ").concat(tarifa.valor_dia, " por dia") +
+                                                (topeado ? ' (tope: no puede superar el sueldo del periodo)' : '')));
                                         }
                                     }
                                     filas.push({
@@ -349,6 +389,17 @@ function calcular(ctx, body) {
                                         dias_pagados_sin_trabajar: pagadosSinTrabajar,
                                         dias_sin_goce: sinGoce,
                                         tardanza_min: tardanzaMin,
+                                        // Va en la fila aunque no se pague: es lo que exige registrar la
+                                        // norma, y es el dato con el que el local decide si activarlo.
+                                        sobretiempo_min: extras.minutos,
+                                        sobretiempo_importe: cfg.usa_sobretiempo ? extras.importe : 0,
+                                        sobretiempo_se_paga: cfg.usa_sobretiempo,
+                                        // Se compara contra el minimo PROPORCIONAL a su jornada: media
+                                        // jornada tiene medio minimo, y avisar con el tope entero seria
+                                        // marcar como ilegal a todo el personal part-time.
+                                        sueldo_bajo_minimo: tarifa
+                                            ? (0, planilla_regimen_1.debajoDelMinimo)(tarifa.valor_dia * 30, tarifa.horas_dia, cfg.rmv)
+                                            : null,
                                         descansos_trabajados: descansos.length,
                                         feriados_trabajados: feriados.length,
                                         conceptos: lineas,
@@ -359,19 +410,19 @@ function calcular(ctx, body) {
                             }
                         });
                     };
-                    _b = 0, _c = personal;
-                    _d.label = 7;
-                case 7:
-                    if (!(_b < _c.length)) return [3 /*break*/, 10];
-                    p = _c[_b];
-                    return [5 /*yield**/, _loop_1(p)];
+                    _i = 0, _c = personal;
+                    _d.label = 8;
                 case 8:
-                    _d.sent();
-                    _d.label = 9;
+                    if (!(_i < _c.length)) return [3 /*break*/, 11];
+                    p = _c[_i];
+                    return [5 /*yield**/, _loop_1(p)];
                 case 9:
-                    _b++;
-                    return [3 /*break*/, 7];
-                case 10: return [2 /*return*/, {
+                    _d.sent();
+                    _d.label = 10;
+                case 10:
+                    _i++;
+                    return [3 /*break*/, 8];
+                case 11: return [2 /*return*/, {
                         periodo: periodo.etiqueta,
                         clave: periodo.clave,
                         tipo: periodo.tipo,
@@ -423,7 +474,7 @@ function linea(conceptos, codigo, importe, detalle) {
 function aplicar(ctx, body, autor) {
     var _a;
     return __awaiter(this, void 0, void 0, function () {
-        var calculo, conceptos, ids, periodo, deLaSede, borradas, ahora, nuevas, _i, _b, f, _c, _d, l, sede;
+        var calculo, conceptos, ids, periodo, deLaSede, donde, borradas, ahora, nuevas, _i, _b, f, _c, _d, l, sede;
         return __generator(this, function (_e) {
             switch (_e.label) {
                 case 0: return [4 /*yield*/, calcular(ctx, body)];
@@ -438,14 +489,13 @@ function aplicar(ctx, body, autor) {
                     if (!deLaSede.length) {
                         return [2 /*return*/, __assign(__assign({}, calculo), { aplicados: 0 })];
                     }
-                    return [4 /*yield*/, prisma.colaborador_boleta.deleteMany({
-                            where: {
-                                idorg: ctx.idorg,
-                                idcolaborador: { "in": deLaSede },
-                                idvariables: { "in": ids },
-                                periodo: periodo
-                            }
-                        })];
+                    donde = {
+                        idorg: ctx.idorg,
+                        idcolaborador: { "in": deLaSede },
+                        idvariables: { "in": ids },
+                        periodo: periodo
+                    };
+                    return [4 /*yield*/, prisma.colaborador_boleta.count({ where: donde })];
                 case 3:
                     borradas = _e.sent();
                     ahora = (0, asistencia_calendario_1.ahoraLima)();
@@ -470,13 +520,27 @@ function aplicar(ctx, body, autor) {
                             });
                         }
                     }
-                    if (!nuevas.length) return [3 /*break*/, 5];
-                    return [4 /*yield*/, prisma.colaborador_boleta.createMany({ data: nuevas })];
+                    // Borrar e insertar van JUNTOS o no van.
+                    //
+                    // Sueltos, una caida entre las dos operaciones deja la boleta sin los
+                    // conceptos viejos y sin los nuevos: el trabajador cobra de menos y no
+                    // queda rastro de por que. Es la unica parte del modulo donde una
+                    // interrupcion a destiempo se traduce directo en plata.
+                    return [4 /*yield*/, prisma.$transaction(__spreadArray([
+                            prisma.colaborador_boleta.deleteMany({ where: donde })
+                        ], (nuevas.length
+                            ? [prisma.colaborador_boleta.createMany({ data: nuevas })]
+                            : []), true))];
                 case 4:
+                    // Borrar e insertar van JUNTOS o no van.
+                    //
+                    // Sueltos, una caida entre las dos operaciones deja la boleta sin los
+                    // conceptos viejos y sin los nuevos: el trabajador cobra de menos y no
+                    // queda rastro de por que. Es la unica parte del modulo donde una
+                    // interrupcion a destiempo se traduce directo en plata.
                     _e.sent();
-                    _e.label = 5;
-                case 5: return [4 /*yield*/, prisma.sede.findUnique({ where: { idsede: ctx.idsede } })];
-                case 6:
+                    return [4 /*yield*/, prisma.sede.findUnique({ where: { idsede: ctx.idsede } })];
+                case 5:
                     sede = _e.sent();
                     return [4 /*yield*/, (0, asistencia_bitacora_1.anotar)({
                             idorg: ctx.idorg,
@@ -485,12 +549,12 @@ function aplicar(ctx, body, autor) {
                             detalle: "Conceptos de asistencia del periodo ".concat(calculo.periodo, " (").concat(calculo.clave, "): ") +
                                 "".concat(nuevas.length, " linea(s) en ").concat(calculo.filas.filter(function (f) { return f.conceptos.length; }).length, " boleta(s), ") +
                                 "+".concat(calculo.totales.ingresos, " / -").concat(calculo.totales.descuentos),
-                            anterior: { lineas_previas: borradas.count },
+                            anterior: { lineas_previas: borradas },
                             nuevo: { lineas: nuevas.length, ingresos: calculo.totales.ingresos, descuentos: calculo.totales.descuentos }
                         }, autor)];
-                case 7:
+                case 6:
                     _e.sent();
-                    return [2 /*return*/, __assign(__assign({}, calculo), { aplicados: nuevas.length, reemplazados: borradas.count })];
+                    return [2 /*return*/, __assign(__assign({}, calculo), { aplicados: nuevas.length, reemplazados: borradas })];
             }
         });
     });

@@ -77,6 +77,7 @@ exports.listarBitacora = exports.eliminarFeriado = exports.guardarFeriado = expo
 var client_1 = require("@prisma/client");
 var asistencia_calendario_1 = require("./asistencia.calendario");
 var asistencia_dialaboral_1 = require("./asistencia.dialaboral");
+var asistencia_limites_1 = require("./asistencia.limites");
 var asistencia_bitacora_1 = require("./asistencia.bitacora");
 var prisma = new client_1.PrismaClient();
 /**
@@ -813,14 +814,14 @@ exports.guardarDiasCierre = guardarDiasCierre;
 // tres formularios haria que la gente conteste una y deje las otras en el
 // default sin enterarse.
 function leerConfiguracion(ctx, anioPedido) {
-    var _a;
+    var _a, _b;
     return __awaiter(this, void 0, void 0, function () {
-        var sede, pol, anio, feriados, abiertos, _b;
-        return __generator(this, function (_c) {
-            switch (_c.label) {
+        var sede, pol, anio, feriados, abiertos, _c, personalActivo;
+        return __generator(this, function (_d) {
+            switch (_d.label) {
                 case 0: return [4 /*yield*/, prisma.sede.findUnique({ where: { idsede: ctx.idsede } })];
                 case 1:
-                    sede = _c.sent();
+                    sede = _d.sent();
                     pol = politicaDe(sede);
                     anio = /^\d{4}$/.test(String(anioPedido || '')) ? Number(anioPedido) : Number((0, asistencia_calendario_1.ahoraLima)().slice(0, 4));
                     return [4 /*yield*/, prisma.asistencia_feriado.findMany({
@@ -832,8 +833,8 @@ function leerConfiguracion(ctx, anioPedido) {
                             orderBy: { fecha: 'asc' }
                         })];
                 case 2:
-                    feriados = _c.sent();
-                    _b = Set.bind;
+                    feriados = _d.sent();
+                    _c = Set.bind;
                     return [4 /*yield*/, prisma.asistencia_excepcion.findMany({
                             where: {
                                 idsede_restobar: (_a = sede === null || sede === void 0 ? void 0 : sede.idsede_restobar) !== null && _a !== void 0 ? _a : 0,
@@ -843,8 +844,13 @@ function leerConfiguracion(ctx, anioPedido) {
                             }
                         })];
                 case 3:
-                    abiertos = new (_b.apply(Set, [void 0, (_c.sent()).map(function (e) { return (0, asistencia_calendario_1.aTextoLima)(e.fecha).slice(0, 10); })]))();
-                    return [2 /*return*/, __assign(__assign({ anio: anio, configurado: !!(sede === null || sede === void 0 ? void 0 : sede.asis_configurado), dias_cierre: String((sede === null || sede === void 0 ? void 0 : sede.dias_cierre) || '').split(',').map(function (d) { return d.trim(); }).filter(Boolean) }, pol), { feriados: feriados.map(function (f) {
+                    abiertos = new (_c.apply(Set, [void 0, (_d.sent()).map(function (e) { return (0, asistencia_calendario_1.aTextoLima)(e.fecha).slice(0, 10); })]))();
+                    return [4 /*yield*/, prisma.colaborador.count({
+                            where: { idorg: ctx.idorg, idsede: ctx.idsede, estado: 0 }
+                        })];
+                case 4:
+                    personalActivo = _d.sent();
+                    return [2 /*return*/, __assign(__assign({ anio: anio, configurado: !!(sede === null || sede === void 0 ? void 0 : sede.asis_configurado), marcador_personas: (_b = sede === null || sede === void 0 ? void 0 : sede.marcador_personas) !== null && _b !== void 0 ? _b : null, marcador_personas_auto: personalActivo, dias_cierre: String((sede === null || sede === void 0 ? void 0 : sede.dias_cierre) || '').split(',').map(function (d) { return d.trim(); }).filter(Boolean) }, pol), { feriados: feriados.map(function (f) {
                                 var fecha = (0, asistencia_calendario_1.aTextoLima)(f.fecha).slice(0, 10);
                                 return {
                                     idferiado: f.idferiado,
@@ -944,7 +950,7 @@ function sincronizarFeriados(ctx, trabajados, todos, anio, autor) {
 function guardarConfiguracion(ctx, body, autor) {
     var _a;
     return __awaiter(this, void 0, void 0, function () {
-        var antes, prev, trabajados, hayListaFeriados, totalFeriados, todosTrabajados, feriadoAbre, descanso, pct, feriadoPct, descansoPct, frase, ahora;
+        var antes, prev, trabajados, hayListaFeriados, totalFeriados, todosTrabajados, feriadoAbre, descanso, pct, feriadoPct, descansoPct, personasPedidas, marcadorPersonas, frase, ahora;
         return __generator(this, function (_b) {
             switch (_b.label) {
                 case 0:
@@ -971,17 +977,26 @@ function guardarConfiguracion(ctx, body, autor) {
                     };
                     feriadoPct = pct(body.feriado_recargo_pct, 0);
                     descansoPct = pct(body.descanso_recargo_pct, 100);
+                    personasPedidas = Number(body.marcador_personas);
+                    marcadorPersonas = Number.isFinite(personasPedidas) && personasPedidas > 0
+                        ? Math.min(Math.round(personasPedidas), 300)
+                        : null;
                     return [4 /*yield*/, prisma.sede.update({
                             where: { idsede: ctx.idsede },
                             data: {
                                 feriado_abre: feriadoAbre,
                                 feriado_recargo_pct: feriadoPct,
                                 descanso_trabajado: descanso,
-                                descanso_recargo_pct: descansoPct
+                                descanso_recargo_pct: descansoPct,
+                                marcador_personas: marcadorPersonas
                             }
                         })];
                 case 4:
                     _b.sent();
+                    // El limitador cachea este valor cinco minutos. Se olvida al guardar para
+                    // que el cambio se vea ya: quien lo sube es porque le esta rechazando
+                    // marcas AHORA, y esperar cinco minutos seria seguir con el problema.
+                    (0, asistencia_limites_1.olvidarCache)();
                     if (!hayListaFeriados) return [3 /*break*/, 6];
                     return [4 /*yield*/, sincronizarFeriados(ctx, trabajados, todosTrabajados, anioDe(body, trabajados), autor)];
                 case 5:

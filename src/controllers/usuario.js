@@ -70,7 +70,7 @@ var __generator = (this && this.__generator) || function (thisArg, body) {
     }
 };
 exports.__esModule = true;
-exports.loginRestobar = exports.login = void 0;
+exports.loginRestobar = exports.loginPanel = exports.login = void 0;
 var express = __importStar(require("express"));
 var userServices = __importStar(require("../services/usuario.service"));
 var errors_util_1 = require("../utils/errors.util");
@@ -98,8 +98,30 @@ var login = function (req, res) { return __awaiter(void 0, void 0, void 0, funct
     });
 }); };
 exports.login = login;
+/** Login con usuario y clave, para entrar a rrhh-1 sin pasar por el POS. */
+var loginPanel = function (req, res) { return __awaiter(void 0, void 0, void 0, function () {
+    var r, error_2;
+    var _a, _b;
+    return __generator(this, function (_c) {
+        switch (_c.label) {
+            case 0:
+                _c.trys.push([0, 2, , 3]);
+                return [4 /*yield*/, userServices.loginPorUsuario((_a = req.body) === null || _a === void 0 ? void 0 : _a.usuario, (_b = req.body) === null || _b === void 0 ? void 0 : _b.pass)];
+            case 1:
+                r = _c.sent();
+                res.status(200).send(r);
+                return [3 /*break*/, 3];
+            case 2:
+                error_2 = _c.sent();
+                // 401 y no 500: el usuario se equivoco, el servidor esta bien.
+                return [2 /*return*/, res.status(401).send({ error: (0, errors_util_1.getErrorMessage)(error_2) })];
+            case 3: return [2 /*return*/];
+        }
+    });
+}); };
+exports.loginPanel = loginPanel;
 var loginRestobar = function (req, res, user) { return __awaiter(void 0, void 0, void 0, function () {
-    var foundUser, error_2;
+    var foundUser, error_3;
     return __generator(this, function (_a) {
         switch (_a.label) {
             case 0:
@@ -111,8 +133,8 @@ var loginRestobar = function (req, res, user) { return __awaiter(void 0, void 0,
                 res.status(200).send(foundUser);
                 return [3 /*break*/, 3];
             case 2:
-                error_2 = _a.sent();
-                return [2 /*return*/, res.status(500).send((0, errors_util_1.getErrorMessage)(error_2))];
+                error_3 = _a.sent();
+                return [2 /*return*/, res.status(500).send((0, errors_util_1.getErrorMessage)(error_3))];
             case 3: return [2 /*return*/];
         }
     });

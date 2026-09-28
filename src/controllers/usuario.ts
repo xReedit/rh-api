@@ -23,6 +23,18 @@ export const login = async (req: Request, res: Response) => {
 }
 
 
+
+/** Login con usuario y clave, para entrar a rrhh-1 sin pasar por el POS. */
+export const loginPanel = async (req: Request, res: Response) => {
+    try {
+        const r = await userServices.loginPorUsuario(req.body?.usuario, req.body?.pass);
+        res.status(200).send(r);
+    } catch (error) {
+        // 401 y no 500: el usuario se equivoco, el servidor esta bien.
+        return res.status(401).send({ error: getErrorMessage(error) });
+    }
+}
+
 export const loginRestobar = async (req: Request, res: Response, user: any) => {
     try {
         const foundUser = await userServices.login(user);

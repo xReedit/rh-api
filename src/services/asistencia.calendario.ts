@@ -135,18 +135,102 @@ export function horasTurno(entradaAt: string, salidaAt: string): number {
 export const DIAS = ['dom', 'lun', 'mar', 'mie', 'jue', 'vie', 'sab'] as const;
 
 export interface TramoDia { e: string; s: string }
-export type HorarioSemanal = { [dia: string]: TramoDia };
+
+/**
+ * El horario de la semana. Cada dia tiene una LISTA de tramos.
+ *
+ * POR QUE UNA LISTA Y NO UN SOLO PAR
+ * El turno partido es el normal en un restaurante: se abre al mediodia, se
+ * cierra a media tarde y se vuelve a abrir de noche. Con un solo par
+ * entrada/salida eso no se podia escribir: 11:00-15:00 y 18:00-23:00 habia que
+ * cargarlo como 11:00-23:00, y entonces el sistema contaba 12 horas en vez de
+ * 9 -- las tres horas que la persona estuvo en su casa figuraban trabajadas.
+ *
+ * COMPATIBILIDAD
+ * Lo ya guardado tiene la forma vieja ({e,s} suelto). No hay migracion de esos
+ * datos: `tramosDe` entiende las dos formas al leer, y `validarHorario`
+ * normaliza a lista al guardar. Un horario viejo se convierte solo la proxima
+ * vez que alguien lo edite.
+ */
+export type HorarioSemanal = { [dia: string]: TramoDia | TramoDia[] };
+
+/** Cuantos tramos se aceptan por dia. Dos son lo normal; tres ya es raro. */
+export const TRAMOS_MAX = 4;
 
 /** Dia de la semana ('lun', 'mar', ...) de una fecha 'YYYY-MM-DD'. */
 export function diaSemana(fecha: string): string {
     return DIAS[new Date(`${fecha}T00:00:00Z`).getUTCDay()];
 }
 
-/** Hora de entrada esperada ese dia, o null si no trabaja / no tiene horario. */
-export function horaEsperada(horario: HorarioSemanal | null, fecha: string): string | null {
-    if (!horario) { return null; }
-    const tramo = horario[diaSemana(fecha)];
-    return tramo && tramo.e ? tramo.e : null;
+/**
+ * Los tramos de ese dia, siempre como lista y en orden.
+ *
+ * Es el unico lugar que sabe que existen dos formas guardadas. Todo lo demas
+ * pregunta por aqui y recibe siempre una lista.
+ */
+export function tramosDe(horario: HorarioSemanal | null, fecha: string): TramoDia[] {
+    if (!horario) { return []; }
+
+    const t = horario[diaSemana(fecha)];
+    if (!t) { return []; }
+
+    const lista = Array.isArray(t) ? t : [t];
+    return lista.filter(x => x && x.e && x.s);
+}
+
+/**
+ * Hora de entrada esperada, o null si no trabaja / no tiene horario.
+ *
+ * Con turno partido hay mas de una entrada esperada en el dia. Si se pasa la
+ * hora en que la persona MARCO, se devuelve la del tramo al que evidentemente
+ * venia: el de entrada mas cercana. Sin eso, quien entra a las 18:00 de un
+ * turno 11-15 / 18-23 aparecia con siete horas de tardanza.
+ *
+ * @param marcadaAt 'YYYY-MM-DD HH:mm:ss' opcional. Sin esto se devuelve la
+ *                  primera entrada del dia, que es lo correcto para un turno
+ *                  corrido y lo que hacian todos los llamadores de antes.
+ */
+export function horaEsperada(
+    horario: HorarioSemanal | null,
+    fecha: string,
+    marcadaAt?: string
+): string | null {
+    const tramos = tramosDe(horario, fecha);
+    if (!tramos.length) { return null; }
+    if (!marcadaAt || tramos.length === 1) { return tramos[0].e; }
+
+    const real = horaEnSegundos(marcadaAt.slice(11));
+    let mejor = tramos[0];
+    let menor = Infinity;
+
+    for (const t of tramos) {
+        // Distancia circular: un tramo que empieza 23:00 esta cerca de las
+        // 00:30, no a 22 horas.
+        const d = Math.abs(real - horaEnSegundos(t.e));
+        const dist = Math.min(d, 86400 - d);
+        if (dist < menor) { menor = dist; mejor = t; }
+    }
+    return mejor.e;
+}
+
+/**
+ * Horas que la persona DEBE estar ese dia, sumando los tramos.
+ *
+ * Suma los tramos en vez de restar la ultima salida menos la primera entrada:
+ * asi el hueco del turno partido -- que es cuando la persona se va -- no cuenta
+ * como trabajado. Es la base contra la que se miden las horas extra.
+ */
+export function horasJornada(horario: HorarioSemanal | null, fecha: string): number {
+    const tramos = tramosDe(horario, fecha);
+    if (!tramos.length) { return 0; }
+
+    let seg = 0;
+    for (const t of tramos) {
+        let d = horaEnSegundos(t.s) - horaEnSegundos(t.e);
+        if (d < 0) { d += 86400; }   // cruza la medianoche
+        seg += d;
+    }
+    return Math.round((seg / 3600) * 100) / 100;
 }
 
 /**
@@ -165,16 +249,115 @@ export function validarHorario(entrada: any): HorarioSemanal | null {
     for (const dia of Object.keys(obj)) {
         if (!DIAS.includes(dia as any)) { throw new Error(`horario: dia invalido "${dia}"`); }
 
-        const t = obj[dia];
-        if (!t || typeof t !== 'object') { throw new Error(`horario: ${dia} sin tramo`); }
-        if (!hhmm.test(t.e)) { throw new Error(`horario: ${dia} entrada invalida "${t.e}"`); }
-        if (!hhmm.test(t.s)) { throw new Error(`horario: ${dia} salida invalida "${t.s}"`); }
-        // e === s seria un turno de 0 h o de 24 h: ambiguo, se rechaza.
-        if (t.e === t.s) { throw new Error(`horario: ${dia} entrada y salida iguales`); }
+        const crudo = obj[dia];
+        if (!crudo) { continue; }   // dia sin tramos = no trabaja
 
-        salida[dia] = { e: t.e, s: t.s };
+        // Se acepta la forma vieja (un tramo suelto) y la nueva (lista).
+        const lista = Array.isArray(crudo) ? crudo : [crudo];
+        if (!lista.length) { continue; }
+        if (lista.length > TRAMOS_MAX) {
+            throw new Error(`horario: ${dia} tiene ${lista.length} tramos, el maximo es ${TRAMOS_MAX}`);
+        }
+
+        const tramos: TramoDia[] = [];
+        for (const t of lista) {
+            if (!t || typeof t !== 'object') { throw new Error(`horario: ${dia} sin tramo`); }
+            if (!hhmm.test(t.e)) { throw new Error(`horario: ${dia} entrada invalida "${t.e}"`); }
+            if (!hhmm.test(t.s)) { throw new Error(`horario: ${dia} salida invalida "${t.s}"`); }
+            // e === s seria un turno de 0 h o de 24 h: ambiguo, se rechaza.
+            if (t.e === t.s) { throw new Error(`horario: ${dia} entrada y salida iguales`); }
+            tramos.push({ e: t.e, s: t.s });
+        }
+
+        // Los tramos van en orden y NO se pueden pisar.
+        //
+        // Dos tramos superpuestos no son un turno partido, son un error de
+        // carga -- y uno que despues no se ve: las horas del solape se
+        // contarian dos veces en la jornada esperada y la persona apareceria
+        // debiendo horas que nunca dejo de trabajar.
+        //
+        // El ultimo tramo puede cruzar la medianoche (18:00-01:30) y por eso
+        // queda fuera de la comprobacion de orden.
+        for (let i = 1; i < tramos.length; i++) {
+            const previo = tramos[i - 1];
+            if (previo.s <= previo.e) {
+                throw new Error(`horario: ${dia} solo el ultimo tramo puede pasar la medianoche`);
+            }
+            if (tramos[i].e < previo.s) {
+                throw new Error(
+                    `horario: ${dia} el tramo ${tramos[i].e}-${tramos[i].s} se pisa con ${previo.e}-${previo.s}`);
+            }
+        }
+
+        salida[dia] = tramos;
     }
 
     // Un objeto vacio es "no trabaja ningun dia"; se guarda como NULL (sin horario).
     return Object.keys(salida).length ? salida : null;
+}
+
+// ---------------------------------------------------------------------------
+// Marcas de un dia
+// ---------------------------------------------------------------------------
+
+export interface DiaMarcas {
+    /** La PRIMERA entrada del dia: es la que dice a que hora llego. */
+    ENTRADA: any | null;
+    /** La ULTIMA salida del dia: es la que dice a que hora se fue. */
+    SALIDA: any | null;
+    /** Todas las entradas, en orden. Un turno partido tiene mas de una. */
+    entradas: any[];
+    /** TODAS las marcas del dia, en orden. Con esto se emparejan los turnos
+     *  para saber cuanto se trabajo de verdad (ver asistencia.sobretiempo). */
+    todas: any[];
+    /** Tardanza del dia: la suma de la de cada entrada. */
+    tardanza_min: number;
+}
+
+/** Un dia sin ninguna marca. Congelado: lo comparten todos los llamadores. */
+export const SIN_MARCAS: DiaMarcas = Object.freeze(
+    { ENTRADA: null, SALIDA: null, entradas: [], todas: [], tardanza_min: 0 }) as DiaMarcas;
+
+/**
+ * Agrupa las marcas por persona y dia.
+ *
+ * POR QUE NO ALCANZA CON GUARDAR LA ULTIMA DE CADA TIPO
+ * Antes esto era `idx[m.tipo] = m`, que se queda con la ultima. Con turno
+ * corrido da igual -- hay una entrada y una salida -- pero con turno partido
+ * hay dos de cada una, y entonces:
+ *   - la ENTRADA del dia pasaba a ser la de las 18:00, no la de las 11:00;
+ *   - la tardanza del dia era solo la del segundo tramo, y la del primero
+ *     desaparecia de la planilla.
+ *
+ * Aqui se guarda la primera entrada, la ultima salida, y la tardanza SUMADA.
+ * Con un solo tramo el resultado es identico al de antes.
+ *
+ * @param diaDe como sacar el dia operativo 'YYYY-MM-DD' de una marca
+ */
+export function indexarMarcas(
+    marcas: any[],
+    diaDe: (m: any) => string
+): Map<string, DiaMarcas> {
+    const idx = new Map<string, DiaMarcas>();
+
+    for (const m of marcas) {
+        const k = `${m.idcolaborador}|${diaDe(m)}`;
+        let d = idx.get(k);
+        if (!d) {
+            d = { ENTRADA: null, SALIDA: null, entradas: [], todas: [], tardanza_min: 0 };
+            idx.set(k, d);
+        }
+
+        d.todas.push(m);
+
+        if (m.tipo === 'ENTRADA') {
+            d.entradas.push(m);
+            if (!d.ENTRADA) { d.ENTRADA = m; }        // la primera manda
+            d.tardanza_min += Math.max(0, m.tardanza_min || 0);
+        } else if (m.tipo === 'SALIDA') {
+            d.SALIDA = m;                              // la ultima manda
+        }
+    }
+
+    return idx;
 }

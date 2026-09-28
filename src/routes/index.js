@@ -50,6 +50,12 @@ router.get('/', function (req, res) {
 });
 router.use('/login', usuario_1.login);
 router.use('/login-restobar', login_restobar_1["default"]);
+// Entrada directa a rrhh-1, sin pasar por el POS.
+//
+// La clave se valida contra el POS, que es la unica fuente. Lo que sigue
+// haciendo falta del primer ingreso por SSO es la FICHA de Recursos Humanos:
+// es la que dice que locales ve cada uno.
+router.post('/login-panel', usuario_1.loginPanel);
 router.use('/verify-login', auth_1.authVerify);
 router.use('/rol', auth_1.auth, rol_1["default"]);
 router.use('/area', auth_1.auth, area_1["default"]);

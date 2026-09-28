@@ -95,6 +95,18 @@ router.put('/update/:id', async (req: any, res, next) => {
 router.get('/byIdColaborador/:id', async (req: any, res) => {
     const { id } = req.params
     const idorg = req['token'].idorg
+
+    // Un id que no es numero da NaN, y Prisma lo rechaza con un error que hasta
+    // hace poco se llevaba puesto al proceso entero. Ahora hay red (ver
+    // middleware/blindaje), pero igual conviene contestar aqui: es un 400 --
+    // el pedido esta mal -- y no un 500, que diria que el problema es nuestro.
+    //
+    // Se devuelve lista vacia y no un error: quien pregunta por los contratos
+    // de nadie tiene que recibir "ninguno", que es la verdad.
+    if (!/^\d+$/.test(String(id))) {
+        return res.status(400).send([])
+    }
+
     const rpt = await prisma.colaborador_contrato.findMany({
         include: {
             colaborador_contrato_detalle: true

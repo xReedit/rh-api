@@ -108,23 +108,37 @@ function horarioATexto(h) {
     if (!h || !Object.keys(h).length) {
         return 'sin horario';
     }
+    /**
+     * Los tramos de un dia en texto: "11:00-15:00 y 18:00-23:00".
+     *
+     * Acepta las dos formas guardadas (un tramo suelto o una lista) porque la
+     * bitacora muestra tambien lo que se guardo hace meses.
+     */
+    var texto = function (t) {
+        if (!t) {
+            return '';
+        }
+        var lista = Array.isArray(t) ? t : [t];
+        return lista.filter(function (x) { return x && x.e && x.s; })
+            .map(function (x) { return "".concat(x.e, "-").concat(x.s); })
+            .join(' y ');
+    };
     var partes = [];
     var i = 0;
     while (i < DIAS.length) {
-        var d = DIAS[i], t = h[d];
-        if (!t) {
+        var d = DIAS[i];
+        var txt = texto(h[d]);
+        if (!txt) {
             i++;
             continue;
         }
+        // Se comparan los tramos YA EN TEXTO: dos dias se agrupan solo si su
+        // jornada entera coincide, tramo por tramo y en el mismo orden.
         var j = i;
-        while (j + 1 < DIAS.length) {
-            var sig = h[DIAS[j + 1]];
-            if (!sig || sig.e !== t.e || sig.s !== t.s) {
-                break;
-            }
+        while (j + 1 < DIAS.length && texto(h[DIAS[j + 1]]) === txt) {
             j++;
         }
-        partes.push((j > i ? "".concat(DIAS_TXT[d], "-").concat(DIAS_TXT[DIAS[j]]) : DIAS_TXT[d]) + " ".concat(t.e, "-").concat(t.s));
+        partes.push((j > i ? "".concat(DIAS_TXT[d], "-").concat(DIAS_TXT[DIAS[j]]) : DIAS_TXT[d]) + " ".concat(txt));
         i = j + 1;
     }
     return partes.join(' · ') || 'sin horario';
