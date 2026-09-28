@@ -334,6 +334,9 @@ router.get('/personal', asinc(async (req: any, res: any) => {
             idcolaborador: c.idcolaborador,
             nombres: ((c.nombres || '') + ' ' + (c.apellidos || '')).trim(),
             dni: c.dni,
+            // El id ademas del nombre: la pantalla necesita preseleccionar el
+            // area en el combo, y con el texto no se puede.
+            idarea: c.idarea || null,
             area: c.idarea ? (nombreArea.get(c.idarea) || '') : '',
             horario_semanal: c.horario_semanal,
             tolerancia_min: c.tolerancia_min ?? 10

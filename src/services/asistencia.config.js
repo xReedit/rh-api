@@ -247,7 +247,7 @@ exports.marcarConfigurado = marcarConfigurado;
 function guardarHorario(ctx, body, autor) {
     var _a;
     return __awaiter(this, void 0, void 0, function () {
-        var id, horario, tolerancia, antes, r, _b;
+        var id, horario, tolerancia, antes, area, r, _b;
         var _c;
         return __generator(this, function (_d) {
             switch (_d.label) {
@@ -272,11 +272,14 @@ function guardarHorario(ctx, body, autor) {
                     if (!antes) {
                         throw new Invalido('ese colaborador no es de esta empresa', 404);
                     }
+                    return [4 /*yield*/, areaPedida(ctx, body)];
+                case 2:
+                    area = _d.sent();
                     return [4 /*yield*/, prisma.colaborador.updateMany({
                             where: { idcolaborador: id, idorg: ctx.idorg },
-                            data: { horario_semanal: horario === null ? client_1.Prisma.DbNull : horario, tolerancia_min: tolerancia }
+                            data: __assign({ horario_semanal: horario === null ? client_1.Prisma.DbNull : horario, tolerancia_min: tolerancia }, (area.cambia ? { idarea: area.idarea } : {}))
                         })];
-                case 2:
+                case 3:
                     r = _d.sent();
                     if (!r.count) {
                         throw new Invalido('ese colaborador no es de esta empresa', 404);
@@ -286,23 +289,63 @@ function guardarHorario(ctx, body, autor) {
                         idorg: ctx.idorg
                     };
                     return [4 /*yield*/, sedeRestobar(ctx.idsede)];
-                case 3: return [4 /*yield*/, _b.apply(void 0, [(_c.idsede_restobar = _d.sent(),
+                case 4: return [4 /*yield*/, _b.apply(void 0, [(_c.idsede_restobar = _d.sent(),
                             _c.entidad = 'HORARIO',
                             _c.identidad = id,
                             _c.idcolaborador = id,
                             _c.accion = 'MODIFICA',
-                            _c.detalle = (0, asistencia_bitacora_1.detalleHorario)(((antes.nombres || '') + ' ' + (antes.apellidos || '')).trim(), antes.horario_semanal, horario, (_a = antes.tolerancia_min) !== null && _a !== void 0 ? _a : 10, tolerancia),
-                            _c.anterior = { horario_semanal: antes.horario_semanal, tolerancia_min: antes.tolerancia_min },
-                            _c.nuevo = { horario_semanal: horario, tolerancia_min: tolerancia },
+                            _c.detalle = (0, asistencia_bitacora_1.detalleHorario)(((antes.nombres || '') + ' ' + (antes.apellidos || '')).trim(), antes.horario_semanal, horario, (_a = antes.tolerancia_min) !== null && _a !== void 0 ? _a : 10, tolerancia
+                            // ponytail: el nombre del area nuevo sale de la validacion, que ya lo
+                            // trajo. El anterior queda en `anterior.idarea`, que alcanza para
+                            // auditar sin una consulta mas.
+                            ) + (area.cambia ? " \u00B7 Area: ".concat(area.nombre || 'sin area') : ''),
+                            _c.anterior = { horario_semanal: antes.horario_semanal, tolerancia_min: antes.tolerancia_min, idarea: antes.idarea },
+                            _c.nuevo = __assign({ horario_semanal: horario, tolerancia_min: tolerancia }, (area.cambia ? { idarea: area.idarea } : {})),
                             _c), autor])];
-                case 4:
+                case 5:
                     _d.sent();
-                    return [2 /*return*/, { idcolaborador: id, horario_semanal: horario, tolerancia_min: tolerancia }];
+                    return [2 /*return*/, __assign({ idcolaborador: id, horario_semanal: horario, tolerancia_min: tolerancia }, (area.cambia ? { idarea: area.idarea } : {}))];
             }
         });
     });
 }
 exports.guardarHorario = guardarHorario;
+/**
+ * El area que pide el cuerpo, ya verificada.
+ *
+ * No alcanza con creerle al cliente: un idarea de otra empresa dejaria a esta
+ * persona colgada de un area ajena, y desde ahi se filtra en los reportes de
+ * ese otro negocio. Se comprueba contra las areas de ESTA sede.
+ *
+ * `cambia: false` significa "el cuerpo no menciono el area": no se toca.
+ */
+function areaPedida(ctx, body) {
+    return __awaiter(this, void 0, void 0, function () {
+        var pedida, a;
+        return __generator(this, function (_a) {
+            switch (_a.label) {
+                case 0:
+                    if (body.idarea === undefined) {
+                        return [2 /*return*/, { cambia: false, idarea: null, nombre: '' }];
+                    }
+                    pedida = Number(body.idarea) || 0;
+                    if (!pedida) {
+                        return [2 /*return*/, { cambia: true, idarea: null, nombre: '' }];
+                    }
+                    return [4 /*yield*/, prisma.area.findFirst({
+                            where: __assign({ idarea: pedida }, areasDeLaSede(ctx.idsede)),
+                            select: { idarea: true, descripcion: true }
+                        })];
+                case 1:
+                    a = _a.sent();
+                    if (!a) {
+                        throw new Invalido('esa area no es de esta sede');
+                    }
+                    return [2 /*return*/, { cambia: true, idarea: a.idarea, nombre: a.descripcion || '' }];
+            }
+        });
+    });
+}
 /** Las areas que puede usar esta sede: las comunes (idsede 0) mas las suyas. */
 var areasDeLaSede = function (idsede) { return ({ estado: '0', OR: [{ idsede: 0 }, { idsede: idsede }] }); };
 function listarAreas(ctx) {

@@ -178,12 +178,20 @@ export async function guardarHorario(ctx: Ctx, body: any, autor: Autor) {
     const antes: any = await prisma.colaborador.findFirst({ where: { idcolaborador: id, idorg: ctx.idorg } });
     if (!antes) { throw new Invalido('ese colaborador no es de esta empresa', 404); }
 
+    // El area es OPCIONAL en el cuerpo: si no viene, no se toca. Asi el
+    // guardado de horario de siempre sigue funcionando igual.
+    const area = await areaPedida(ctx, body);
+
     // Una columna JSON nullable no acepta `null` plano: Prisma exige DbNull
     // (NULL de SQL) para distinguirlo de JsonNull (el literal JSON `null`).
     // Aqui "sin horario" es NULL de verdad.
     const r = await prisma.colaborador.updateMany({
         where: { idcolaborador: id, idorg: ctx.idorg },
-        data: { horario_semanal: horario === null ? Prisma.DbNull : horario, tolerancia_min: tolerancia } as any
+        data: {
+            horario_semanal: horario === null ? Prisma.DbNull : horario,
+            tolerancia_min: tolerancia,
+            ...(area.cambia ? { idarea: area.idarea } : {})
+        } as any
     });
     if (!r.count) { throw new Invalido('ese colaborador no es de esta empresa', 404); }
 
@@ -193,12 +201,42 @@ export async function guardarHorario(ctx: Ctx, body: any, autor: Autor) {
         detalle: detalleHorario(
             ((antes.nombres || '') + ' ' + (antes.apellidos || '')).trim(),
             antes.horario_semanal, horario, antes.tolerancia_min ?? 10, tolerancia
-        ),
-        anterior: { horario_semanal: antes.horario_semanal, tolerancia_min: antes.tolerancia_min },
-        nuevo: { horario_semanal: horario, tolerancia_min: tolerancia }
+        // ponytail: el nombre del area nuevo sale de la validacion, que ya lo
+        // trajo. El anterior queda en `anterior.idarea`, que alcanza para
+        // auditar sin una consulta mas.
+        ) + (area.cambia ? ` · Area: ${area.nombre || 'sin area'}` : ''),
+        anterior: { horario_semanal: antes.horario_semanal, tolerancia_min: antes.tolerancia_min, idarea: antes.idarea },
+        nuevo: { horario_semanal: horario, tolerancia_min: tolerancia, ...(area.cambia ? { idarea: area.idarea } : {}) }
     }, autor);
 
-    return { idcolaborador: id, horario_semanal: horario, tolerancia_min: tolerancia };
+    return {
+        idcolaborador: id, horario_semanal: horario, tolerancia_min: tolerancia,
+        ...(area.cambia ? { idarea: area.idarea } : {})
+    };
+}
+
+/**
+ * El area que pide el cuerpo, ya verificada.
+ *
+ * No alcanza con creerle al cliente: un idarea de otra empresa dejaria a esta
+ * persona colgada de un area ajena, y desde ahi se filtra en los reportes de
+ * ese otro negocio. Se comprueba contra las areas de ESTA sede.
+ *
+ * `cambia: false` significa "el cuerpo no menciono el area": no se toca.
+ */
+async function areaPedida(ctx: Ctx, body: any): Promise<{ cambia: boolean; idarea: number | null; nombre: string }> {
+    if (body.idarea === undefined) { return { cambia: false, idarea: null, nombre: '' }; }
+
+    const pedida = Number(body.idarea) || 0;
+    if (!pedida) { return { cambia: true, idarea: null, nombre: '' }; }
+
+    const a = await prisma.area.findFirst({
+        where: { idarea: pedida, ...areasDeLaSede(ctx.idsede) },
+        select: { idarea: true, descripcion: true }
+    });
+    if (!a) { throw new Invalido('esa area no es de esta sede'); }
+
+    return { cambia: true, idarea: a.idarea, nombre: a.descripcion || '' };
 }
 
 /** Las areas que puede usar esta sede: las comunes (idsede 0) mas las suyas. */
