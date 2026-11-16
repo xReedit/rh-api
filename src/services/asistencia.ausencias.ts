@@ -323,3 +323,36 @@ export async function darDeBaja(ctx: Ctx, body: any, autor: Autor) {
 
     return { idcolaborador, f_baja: fecha, motivo_baja: motivo };
 }
+
+/**
+ * Deshace la baja: vuelve a aparecer en el dia, los reportes y la planilla.
+ *
+ * El celular NO se reactiva: el que se revoco en la baja queda revocado y la
+ * persona vuelve a enrolarse con un QR nuevo, como cualquier alta.
+ */
+export async function reactivar(ctx: Ctx, body: any, autor: Autor) {
+    const idcolaborador = Number(body.idcolaborador) || 0;
+    if (!idcolaborador) { throw new Invalido('Falta el colaborador.'); }
+
+    const c: any = await prisma.colaborador.findFirst({
+        where: { idcolaborador, idorg: ctx.idorg, idsede: ctx.idsede }
+    });
+    if (!c) { throw new Invalido('Ese colaborador no es de esta sede.', 404); }
+    if (c.estado === 0) { throw new Invalido('Ese colaborador ya esta activo.'); }
+
+    await prisma.colaborador.update({
+        where: { idcolaborador },
+        data: { estado: 0, f_baja: null, motivo_baja: null } as any
+    });
+
+    const sede: any = await prisma.sede.findUnique({ where: { idsede: ctx.idsede } });
+    await anotar({
+        idorg: ctx.idorg, idsede_restobar: sede?.idsede_restobar ?? 0,
+        entidad: 'HORARIO', identidad: idcolaborador, idcolaborador, accion: 'CREA',
+        detalle: `Reactivado ${((c.nombres || '') + ' ' + (c.apellidos || '')).trim()} (baja anterior ${c.f_baja || '-'}: ${c.motivo_baja || '-'})`,
+        anterior: { estado: c.estado, f_baja: c.f_baja, motivo_baja: c.motivo_baja },
+        nuevo: { estado: 0 }
+    }, autor);
+
+    return { idcolaborador };
+}

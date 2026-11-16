@@ -841,6 +841,79 @@ router.post('/ausencias/baja', asinc(function (req, res) { return __awaiter(void
         }
     });
 }); }));
+/**
+ * Baja / reactivar desde la lista de Empleados.
+ *
+ * Esa lista muestra a toda la empresa, no solo al local elegido arriba, asi que
+ * la sede sale del propio colaborador -- y se verifica que el usuario tenga
+ * acceso a ella, igual que en tenantDe.
+ */
+function tenantDelColaborador(req) {
+    var _a, _b, _c;
+    return __awaiter(this, void 0, void 0, function () {
+        var idorg, c, _d;
+        return __generator(this, function (_e) {
+            switch (_e.label) {
+                case 0:
+                    idorg = Number((_a = req.token) === null || _a === void 0 ? void 0 : _a.idorg);
+                    if (!idorg) {
+                        throw new asistencia_config_1.Invalido('El token no trae empresa.', 401);
+                    }
+                    return [4 /*yield*/, prisma.colaborador.findFirst({
+                            where: { idcolaborador: Number((_b = req.body) === null || _b === void 0 ? void 0 : _b.idcolaborador) || 0, idorg: idorg }
+                        })];
+                case 1:
+                    c = _e.sent();
+                    if (!c) {
+                        throw new asistencia_config_1.Invalido('Ese colaborador no es de tu empresa.', 404);
+                    }
+                    _d = c.idsede !== Number((_c = req.token) === null || _c === void 0 ? void 0 : _c.idsede);
+                    if (!_d) return [3 /*break*/, 3];
+                    return [4 /*yield*/, puedeVerSede(req, idorg, c.idsede)];
+                case 2:
+                    _d = !(_e.sent());
+                    _e.label = 3;
+                case 3:
+                    if (_d) {
+                        throw new asistencia_config_1.Invalido('Tu usuario no tiene acceso al local de ese colaborador.', 403);
+                    }
+                    return [2 /*return*/, { idorg: idorg, idsede: c.idsede }];
+            }
+        });
+    });
+}
+router.post('/personal/baja', asinc(function (req, res) { return __awaiter(void 0, void 0, void 0, function () {
+    var _a, _b, _c, _d;
+    return __generator(this, function (_e) {
+        switch (_e.label) {
+            case 0:
+                _a = ok;
+                _b = [res];
+                _d = (_c = ausencias).darDeBaja;
+                return [4 /*yield*/, tenantDelColaborador(req)];
+            case 1: return [4 /*yield*/, _d.apply(_c, [_e.sent(), req.body, autorRrhh(req)])];
+            case 2:
+                _a.apply(void 0, _b.concat([_e.sent()]));
+                return [2 /*return*/];
+        }
+    });
+}); }));
+router.post('/personal/reactivar', asinc(function (req, res) { return __awaiter(void 0, void 0, void 0, function () {
+    var _a, _b, _c, _d;
+    return __generator(this, function (_e) {
+        switch (_e.label) {
+            case 0:
+                _a = ok;
+                _b = [res];
+                _d = (_c = ausencias).reactivar;
+                return [4 /*yield*/, tenantDelColaborador(req)];
+            case 1: return [4 /*yield*/, _d.apply(_c, [_e.sent(), req.body, autorRrhh(req)])];
+            case 2:
+                _a.apply(void 0, _b.concat([_e.sent()]));
+                return [2 /*return*/];
+        }
+    });
+}); }));
 // ---------------------------------------------------------------------------
 // Planilla: de las marcas a la boleta
 // ---------------------------------------------------------------------------

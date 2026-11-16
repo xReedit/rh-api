@@ -61,7 +61,7 @@ var __generator = (this && this.__generator) || function (thisArg, body) {
     }
 };
 exports.__esModule = true;
-exports.darDeBaja = exports.registrarAusencia = exports.alertas = exports.DIAS_PARA_ALERTAR = void 0;
+exports.reactivar = exports.darDeBaja = exports.registrarAusencia = exports.alertas = exports.DIAS_PARA_ALERTAR = void 0;
 var client_1 = require("@prisma/client");
 var asistencia_calendario_1 = require("./asistencia.calendario");
 var asistencia_dialaboral_1 = require("./asistencia.dialaboral");
@@ -452,3 +452,57 @@ function darDeBaja(ctx, body, autor) {
     });
 }
 exports.darDeBaja = darDeBaja;
+/**
+ * Deshace la baja: vuelve a aparecer en el dia, los reportes y la planilla.
+ *
+ * El celular NO se reactiva: el que se revoco en la baja queda revocado y la
+ * persona vuelve a enrolarse con un QR nuevo, como cualquier alta.
+ */
+function reactivar(ctx, body, autor) {
+    var _a;
+    return __awaiter(this, void 0, void 0, function () {
+        var idcolaborador, c, sede;
+        return __generator(this, function (_b) {
+            switch (_b.label) {
+                case 0:
+                    idcolaborador = Number(body.idcolaborador) || 0;
+                    if (!idcolaborador) {
+                        throw new asistencia_config_1.Invalido('Falta el colaborador.');
+                    }
+                    return [4 /*yield*/, prisma.colaborador.findFirst({
+                            where: { idcolaborador: idcolaborador, idorg: ctx.idorg, idsede: ctx.idsede }
+                        })];
+                case 1:
+                    c = _b.sent();
+                    if (!c) {
+                        throw new asistencia_config_1.Invalido('Ese colaborador no es de esta sede.', 404);
+                    }
+                    if (c.estado === 0) {
+                        throw new asistencia_config_1.Invalido('Ese colaborador ya esta activo.');
+                    }
+                    return [4 /*yield*/, prisma.colaborador.update({
+                            where: { idcolaborador: idcolaborador },
+                            data: { estado: 0, f_baja: null, motivo_baja: null }
+                        })];
+                case 2:
+                    _b.sent();
+                    return [4 /*yield*/, prisma.sede.findUnique({ where: { idsede: ctx.idsede } })];
+                case 3:
+                    sede = _b.sent();
+                    return [4 /*yield*/, (0, asistencia_bitacora_1.anotar)({
+                            idorg: ctx.idorg, idsede_restobar: (_a = sede === null || sede === void 0 ? void 0 : sede.idsede_restobar) !== null && _a !== void 0 ? _a : 0,
+                            entidad: 'HORARIO', identidad: idcolaborador,
+                            idcolaborador: idcolaborador,
+                            accion: 'CREA',
+                            detalle: "Reactivado ".concat(((c.nombres || '') + ' ' + (c.apellidos || '')).trim(), " (baja anterior ").concat(c.f_baja || '-', ": ").concat(c.motivo_baja || '-', ")"),
+                            anterior: { estado: c.estado, f_baja: c.f_baja, motivo_baja: c.motivo_baja },
+                            nuevo: { estado: 0 }
+                        }, autor)];
+                case 4:
+                    _b.sent();
+                    return [2 /*return*/, { idcolaborador: idcolaborador }];
+            }
+        });
+    });
+}
+exports.reactivar = reactivar;

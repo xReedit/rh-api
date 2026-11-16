@@ -427,6 +427,34 @@ router.post('/ausencias/baja', asinc(async (req: any, res: any) => {
     ok(res, await ausencias.darDeBaja(await tenantDe(req), req.body, autorRrhh(req)));
 }));
 
+/**
+ * Baja / reactivar desde la lista de Empleados.
+ *
+ * Esa lista muestra a toda la empresa, no solo al local elegido arriba, asi que
+ * la sede sale del propio colaborador -- y se verifica que el usuario tenga
+ * acceso a ella, igual que en tenantDe.
+ */
+async function tenantDelColaborador(req: any) {
+    const idorg = Number(req.token?.idorg);
+    if (!idorg) { throw new Invalido('El token no trae empresa.', 401); }
+    const c: any = await prisma.colaborador.findFirst({
+        where: { idcolaborador: Number(req.body?.idcolaborador) || 0, idorg }
+    });
+    if (!c) { throw new Invalido('Ese colaborador no es de tu empresa.', 404); }
+    if (c.idsede !== Number(req.token?.idsede) && !(await puedeVerSede(req, idorg, c.idsede))) {
+        throw new Invalido('Tu usuario no tiene acceso al local de ese colaborador.', 403);
+    }
+    return { idorg, idsede: c.idsede };
+}
+
+router.post('/personal/baja', asinc(async (req: any, res: any) => {
+    ok(res, await ausencias.darDeBaja(await tenantDelColaborador(req), req.body, autorRrhh(req)));
+}));
+
+router.post('/personal/reactivar', asinc(async (req: any, res: any) => {
+    ok(res, await ausencias.reactivar(await tenantDelColaborador(req), req.body, autorRrhh(req)));
+}));
+
 // ---------------------------------------------------------------------------
 // Planilla: de las marcas a la boleta
 // ---------------------------------------------------------------------------

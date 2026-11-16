@@ -151,7 +151,7 @@ router.get('/byIdorg/:id', function (req, res) { return __awaiter(void 0, void 0
     return __generator(this, function (_a) {
         switch (_a.label) {
             case 0:
-                id = req.params.id;
+                id = Number(req['token'].idorg) || 0;
                 return [4 /*yield*/, prisma.$queryRawUnsafe("select c.*, COALESCE(s.nombre, '-') nom_sede, COALESCE(s.ciudad, '-') ciudad_sede from colaborador c \t\n\tleft join colaborador_contrato cc on cc.idcolaborador = c.idcolaborador \n\tleft join colaborador_contrato_detalle ccd on ccd.idcolaborador_contrato = cc.idcolaborador_contrato \n\tleft join sede s on s.idsede = ccd.idsede_trabajo \nwhere c.idorg = ".concat(id, "\nGROUP by c.idcolaborador"))];
             case 1:
                 rpt = _a.sent();

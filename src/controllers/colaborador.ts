@@ -58,8 +58,9 @@ router.get('/byId/:id', async (req: any, res) => {
 });
 
 
-router.get('/byIdorg/:id', async (req: any, res) => {    
-    const { id } = req.params
+router.get('/byIdorg/:id', async (req: any, res) => {
+    // La empresa sale del token, no de la URL: cambiar el numero mostraba otra empresa.
+    const id = Number(req['token'].idorg) || 0
     const rpt = await prisma.$queryRawUnsafe(`select c.*, COALESCE(s.nombre, '-') nom_sede, COALESCE(s.ciudad, '-') ciudad_sede from colaborador c 	
 	left join colaborador_contrato cc on cc.idcolaborador = c.idcolaborador 
 	left join colaborador_contrato_detalle ccd on ccd.idcolaborador_contrato = cc.idcolaborador_contrato 
